@@ -6,6 +6,8 @@
    - Storage: Logo (URL) + cache DataURL para PDF
    - PDF (jsPDF + AutoTable)
    - FIX real: History NO se mostraba porque setSub() no activaba panel-history
+   - NEW: Service Catalog (categorías/servicios) + Templates (Notas/Garantías/Condiciones)
+     -> editable y reusable en Cotización + Factura (single source of truth)
 ========================= */
 
 /* ===== Firebase ESM CDN ===== */
@@ -103,11 +105,11 @@ async function fileToDataUrl(file) {
 /* =========================
    FIRESTORE PATHS
 ========================= */
-function userBase(uid) { return `users/${uid}`; }
-function colDocs(uid) { return collection(db, `${userBase(uid)}/docs`); }
-function colCustomers(uid) { return collection(db, `${userBase(uid)}/customers`); }
-function colVendors(uid) { return collection(db, `${userBase(uid)}/vendors`); }
-function docSettings(uid) { return doc(db, `${userBase(uid)}/settings/main`); }
+function userBase(uid_) { return `users/${uid_}`; }
+function colDocs(uid_) { return collection(db, `${userBase(uid_)}/docs`); }
+function colCustomers(uid_) { return collection(db, `${userBase(uid_)}/customers`); }
+function colVendors(uid_) { return collection(db, `${userBase(uid_)}/vendors`); }
+function docSettings(uid_) { return doc(db, `${userBase(uid_)}/settings/main`); }
 
 /* =========================
    APP STATE
@@ -124,12 +126,70 @@ let state = {
   docs: [],
   customers: [],
   vendors: [],
-  cfg: null
+  cfg: null,
+
+  // runtime cache
+  catalogIndex: { catById: new Map(), svcById: new Map() }
 };
 
 /* =========================
-   DEFAULTS
+   DEFAULTS (incluye Catálogo + Plantillas)
 ========================= */
+function defaultCatalog() {
+  // Catálogo inicial “enterprise-ready”: útil y editable
+  return {
+    categories: [
+      {
+        id: "cat_mant",
+        name: "Mantenimiento",
+        services: [
+          {
+            id: "svc_mant_res",
+            name: "Mantenimiento Preventivo Mini Split (Residencial)",
+            desc: "Servicio preventivo: limpieza, revisión eléctrica, drenajes, presión/temperatura, prueba operacional.",
+            price: 55,
+            notes: "Incluye 1 unidad. Precio puede variar por acceso/condición.",
+            warranty: "Garantía de servicio: 30 días en mano de obra (no cubre mal uso, equipos intervenidos, ni fallas ajenas al servicio).",
+            terms: "Depósito (si aplica) no reembolsable en caso de ausencia/no respuesta. 15 min de espera."
+          }
+        ]
+      },
+      {
+        id: "cat_diag",
+        name: "Diagnóstico",
+        services: [
+          {
+            id: "svc_diag_bas",
+            name: "Diagnóstico Técnico",
+            desc: "Evaluación completa: lectura de códigos, verificación sensores, amperaje/voltaje, presiones (si aplica) y recomendación técnica.",
+            price: 45,
+            notes: "Diagnóstico no incluye reparación ni piezas.",
+            warranty: "Garantía aplica solo a reparación realizada (si procede).",
+            terms: "El diagnóstico se acredita a reparación el mismo día (si aplica)."
+          }
+        ]
+      }
+    ]
+  };
+}
+
+function defaultTemplates() {
+  return {
+    notes: [
+      { id: "nt_std", name: "Nota estándar", text: "Gracias por preferirnos. Trabajo realizado según inspección en sitio." },
+      { id: "nt_dep", name: "Depósito requerido", text: "Depósito requerido para agendar. Se descuenta del servicio al completar." }
+    ],
+    warranties: [
+      { id: "w_30", name: "Garantía 30 días", text: "Garantía de 30 días en mano de obra. No cubre mal uso, terceros, variaciones eléctricas o piezas no provistas." },
+      { id: "w_90", name: "Garantía 90 días", text: "Garantía de 90 días en mano de obra. No cubre mal uso, terceros, variaciones eléctricas o piezas no provistas." }
+    ],
+    terms: [
+      { id: "t_std", name: "Términos estándar", text: "Pago contra entrega. Cotización sujeta a disponibilidad de piezas. IVU aplicado según ley." },
+      { id: "t_wait", name: "Política de espera", text: "Se esperan 15 minutos en la ubicación. De no responder, se cancela y puede aplicar cargo." }
+    ]
+  };
+}
+
 function defaultCfg() {
   return {
     biz: {
@@ -140,10 +200,68 @@ function defaultCfg() {
       logoUrl: "",      // Storage URL
       logoDataUrl: ""   // cache para PDF (no obligatorio guardarlo en Firestore)
     },
-    taxRate: 11.5
+    taxRate: 11.5,
+
+    // NEW
+    catalog: defaultCatalog(),
+    templates: defaultTemplates()
   };
 }
 
+function normalizeCfg(cfg) {
+  const base = defaultCfg();
+  const merged = { ...base, ...(cfg || {}) };
+  merged.biz = { ...base.biz, ...(cfg?.biz || {}) };
+  merged.catalog = cfg?.catalog?.categories ? cfg.catalog : base.catalog;
+  merged.templates = cfg?.templates ? {
+    notes: Array.isArray(cfg.templates.notes) ? cfg.templates.notes : base.templates.notes,
+    warranties: Array.isArray(cfg.templates.warranties) ? cfg.templates.warranties : base.templates.warranties,
+    terms: Array.isArray(cfg.templates.terms) ? cfg.templates.terms : base.templates.terms
+  } : base.templates;
+
+  // limpia mínimos
+  merged.catalog.categories = (merged.catalog.categories || []).map(c => ({
+    id: String(c.id || uid("cat")),
+    name: String(c.name || "Categoría"),
+    services: (c.services || []).map(s => ({
+      id: String(s.id || uid("svc")),
+      name: String(s.name || "Servicio"),
+      desc: String(s.desc || ""),
+      price: Number(s.price || 0),
+      notes: String(s.notes || ""),
+      warranty: String(s.warranty || ""),
+      terms: String(s.terms || "")
+    }))
+  }));
+
+  const fixTpl = (arr, fallback) =>
+    (Array.isArray(arr) ? arr : fallback).map(x => ({
+      id: String(x.id || uid("tpl")),
+      name: String(x.name || "Plantilla"),
+      text: String(x.text || "")
+    }));
+
+  merged.templates.notes = fixTpl(merged.templates.notes, base.templates.notes);
+  merged.templates.warranties = fixTpl(merged.templates.warranties, base.templates.warranties);
+  merged.templates.terms = fixTpl(merged.templates.terms, base.templates.terms);
+
+  return merged;
+}
+
+function indexCatalog() {
+  state.catalogIndex.catById = new Map();
+  state.catalogIndex.svcById = new Map();
+
+  const cats = state.cfg?.catalog?.categories || [];
+  cats.forEach(c => {
+    state.catalogIndex.catById.set(c.id, c);
+    (c.services || []).forEach(s => state.catalogIndex.svcById.set(s.id, { ...s, _catId: c.id }));
+  });
+}
+
+/* =========================
+   DOC DEFAULT
+========================= */
 function newDoc() {
   const cfg = state.cfg || defaultCfg();
   const today = toISODate(new Date());
@@ -157,7 +275,7 @@ function newDoc() {
     status: "PENDIENTE",
     client: { name: "", contact: "", addr: "" },
     validUntil: valid,
-    items: [{ id: uid("it"), desc: "", qty: 1, price: 0 }],
+    items: [{ id: uid("it"), desc: "", qty: 1, price: 0, catId: "", svcId: "" }], // NEW: catId/svcId opcional
     notes: "",
     terms: "",
     totals: { sub: 0, tax: 0, grand: 0 },
@@ -171,7 +289,6 @@ function newDoc() {
    AUTH UI (inyección)
 ========================= */
 function ensureAuthButtons() {
-  // Mete botones en topActions sin tocar HTML
   const topActions = document.querySelector(".topActions");
   if (!topActions) return;
 
@@ -203,9 +320,13 @@ function refreshAuthUI() {
   if ($("btnLogin")) $("btnLogin").style.display = isOn ? "none" : "inline-flex";
   if ($("btnLogout")) $("btnLogout").style.display = isOn ? "inline-flex" : "none";
 
-  // Si no hay sesión, bloquea guardar/pdf (para no perder data)
   ["btnSaveDoc","btnPDF","btnConfirmFromPreview","btnExportHist","btnClearHist","btnAddCustomer"]
     .forEach(id => { if ($(id)) $(id).disabled = !isOn; });
+
+  // Catálogo/plantillas también requieren login (es data de la cuenta)
+  ["btnOpenCatalog","btnSaveCatalog","btnAddCategory","btnDelCategory","btnAddService","btnDelService",
+   "btnAddTplNotes","btnDelTplNotes","btnAddTplWarranty","btnDelTplWarranty","btnAddTplTerms","btnDelTplTerms"
+  ].forEach(id => { if ($(id)) $(id).disabled = !isOn; });
 }
 
 /* =========================
@@ -229,14 +350,16 @@ async function loadAllFromFirestore() {
   // Settings
   const sref = docSettings(state.user.uid);
   const snap = await getDoc(sref);
-  state.cfg = snap.exists() ? { ...defaultCfg(), ...snap.data() } : defaultCfg();
+  state.cfg = snap.exists() ? normalizeCfg(snap.data()) : normalizeCfg(defaultCfg());
 
-  // Si hay logoUrl y NO hay logoDataUrl, cachealo para PDF
+  // Cache logo para PDF si aplica
   if (state.cfg?.biz?.logoUrl && !state.cfg.biz.logoDataUrl) {
     try {
       state.cfg.biz.logoDataUrl = await urlToDataUrl(state.cfg.biz.logoUrl);
     } catch { /* ignore */ }
   }
+
+  indexCatalog();
 
   // Docs
   const qDocs = query(colDocs(state.user.uid), orderBy("updatedAt", "desc"));
@@ -257,14 +380,14 @@ async function loadAllFromFirestore() {
   renderHistory();
   renderCustomers();
   renderReporting();
+  refreshTemplateUI();
 }
 
 async function saveSettingsToFirestore() {
   if (!state.user) return;
   const sref = docSettings(state.user.uid);
 
-  // Guarda SOLO lo esencial (logoDataUrl no hace falta guardarlo)
-  const safeCfg = JSON.parse(JSON.stringify(state.cfg || defaultCfg()));
+  const safeCfg = JSON.parse(JSON.stringify(normalizeCfg(state.cfg || defaultCfg())));
   if (safeCfg?.biz) safeCfg.biz.logoDataUrl = "";
 
   await setDoc(sref, { ...safeCfg, updatedAt: serverTimestamp() }, { merge: true });
@@ -341,23 +464,723 @@ function readDocHeaderIntoState() {
 }
 
 /* =========================
-   ITEMS RENDER
+   TEMPLATE UI (Notas/Garantías/Condiciones) — inyectado
+========================= */
+function ensureTemplateUI() {
+  const notesEl = $("notes");
+  const termsEl = $("terms");
+  if (!notesEl || !termsEl) return;
+  if (document.getElementById("tplControls")) return;
+
+  // Inserta controles arriba de Notas/Condiciones
+  const grid2 = notesEl.closest(".grid2");
+  if (!grid2) return;
+
+  const bar = document.createElement("div");
+  bar.id = "tplControls";
+  bar.className = "card section";
+  bar.style.marginTop = "12px";
+  bar.innerHTML = `
+    <div class="sectionHead">
+      <div class="sectionTitle">Plantillas rápidas</div>
+      <div class="rowBtns">
+        <button class="btn ghost" id="btnOpenCatalog" type="button">Service Catalog</button>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="field">
+        <label>Notas (plantilla)</label>
+        <div class="rowBtns" style="gap:8px">
+          <select class="input" id="tplNotesSelect"></select>
+          <button class="btn ghost" id="btnApplyNotes" type="button">Insertar</button>
+          <button class="btn ghost" id="btnReplaceNotes" type="button">Reemplazar</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Garantía (plantilla)</label>
+        <div class="rowBtns" style="gap:8px">
+          <select class="input" id="tplWarrantySelect"></select>
+          <button class="btn ghost" id="btnApplyWarranty" type="button">Insertar</button>
+          <button class="btn ghost" id="btnReplaceWarranty" type="button">Reemplazar</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Condiciones (plantilla)</label>
+        <div class="rowBtns" style="gap:8px">
+          <select class="input" id="tplTermsSelect"></select>
+          <button class="btn ghost" id="btnApplyTerms" type="button">Insertar</button>
+          <button class="btn ghost" id="btnReplaceTerms" type="button">Reemplazar</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Acciones</label>
+        <div class="muted">Catálogo y plantillas se guardan en tu cuenta (Firestore settings).</div>
+      </div>
+    </div>
+  `;
+
+  // Insertarlo justo antes de la grid2 (Notas/Condiciones) para que se sienta nativo
+  grid2.parentElement.insertBefore(bar, grid2);
+
+  // Bind
+  $("btnApplyNotes").addEventListener("click", () => applyTemplateTo("notes", "notes", { replace: false }));
+  $("btnReplaceNotes").addEventListener("click", () => applyTemplateTo("notes", "notes", { replace: true }));
+
+  $("btnApplyWarranty").addEventListener("click", () => applyTemplateTo("warranties", "notes", { replace: false }));
+  $("btnReplaceWarranty").addEventListener("click", () => applyTemplateTo("warranties", "notes", { replace: true }));
+
+  $("btnApplyTerms").addEventListener("click", () => applyTemplateTo("terms", "terms", { replace: false }));
+  $("btnReplaceTerms").addEventListener("click", () => applyTemplateTo("terms", "terms", { replace: true }));
+
+  // Catalog modal open
+  $("btnOpenCatalog").addEventListener("click", openCatalogModal);
+
+  refreshTemplateUI();
+  refreshAuthUI();
+}
+
+function refreshTemplateUI() {
+  const cfg = state.cfg || defaultCfg();
+  const t = cfg.templates || defaultTemplates();
+
+  const fill = (selId, arr) => {
+    const sel = $(selId);
+    if (!sel) return;
+    sel.innerHTML = "";
+    arr.forEach(x => {
+      const o = document.createElement("option");
+      o.value = x.id;
+      o.textContent = x.name;
+      sel.appendChild(o);
+    });
+  };
+
+  fill("tplNotesSelect", t.notes || []);
+  fill("tplWarrantySelect", t.warranties || []);
+  fill("tplTermsSelect", t.terms || []);
+}
+
+function applyTemplateTo(kind, targetField, { replace }) {
+  const cfg = state.cfg || defaultCfg();
+  const tpl = cfg.templates?.[kind] || [];
+  const selId = kind === "notes" ? "tplNotesSelect" : (kind === "warranties" ? "tplWarrantySelect" : "tplTermsSelect");
+  const chosenId = $(selId)?.value;
+
+  const found = tpl.find(x => x.id === chosenId);
+  if (!found) return;
+
+  const box = $(targetField);
+  if (!box) return;
+
+  const text = (found.text || "").trim();
+  if (!text) return;
+
+  if (replace || !box.value.trim()) {
+    box.value = text;
+  } else {
+    box.value = (box.value.trim() + "\n\n" + text).trim();
+  }
+
+  // sync state
+  readDocHeaderIntoState();
+}
+
+/* =========================
+   SERVICE CATALOG MANAGER — modal inyectado (Configuration-grade)
+========================= */
+function ensureCatalogModal() {
+  if (document.getElementById("catalogPanel")) return;
+
+  const modal = document.createElement("div");
+  modal.className = "modal";
+  modal.id = "catalogPanel";
+  modal.style.display = "none";
+  modal.innerHTML = `
+    <div class="modalCard">
+      <div class="modalHead">
+        <div>
+          <div class="modalTitle">Service Catalog</div>
+          <div class="modalHint">Categorías + servicios + plantillas. Una sola fuente de verdad.</div>
+        </div>
+        <button class="btn ghost" id="btnCloseCatalog" type="button">Cerrar</button>
+      </div>
+
+      <div class="modalBody">
+        <section class="card section">
+          <div class="sectionHead">
+            <div class="sectionTitle">Categorías</div>
+            <div class="rowBtns">
+              <button class="btn ghost" id="btnAddCategory" type="button">+ Categoría</button>
+              <button class="btn danger" id="btnDelCategory" type="button">Borrar categoría</button>
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div class="field">
+              <label>Seleccionar</label>
+              <select class="input" id="catSelect"></select>
+            </div>
+            <div class="field">
+              <label>Nombre de categoría</label>
+              <input class="input" id="catName" placeholder="Ej. Mantenimiento" />
+            </div>
+          </div>
+        </section>
+
+        <section class="card section">
+          <div class="sectionHead">
+            <div class="sectionTitle">Servicios de la categoría</div>
+            <div class="rowBtns">
+              <button class="btn ghost" id="btnAddService" type="button">+ Servicio</button>
+              <button class="btn danger" id="btnDelService" type="button">Borrar servicio</button>
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div class="field">
+              <label>Seleccionar servicio</label>
+              <select class="input" id="svcSelect"></select>
+            </div>
+            <div class="field">
+              <label>Nombre del servicio</label>
+              <input class="input" id="svcName" placeholder="Ej. Diagnóstico Técnico" />
+            </div>
+            <div class="field">
+              <label>Precio base</label>
+              <input class="input" id="svcPrice" type="number" step="0.01" />
+            </div>
+            <div class="field">
+              <label>Descripción (para Items)</label>
+              <textarea class="input" id="svcDesc" rows="3"></textarea>
+            </div>
+            <div class="field">
+              <label>Notas sugeridas</label>
+              <textarea class="input" id="svcNotes" rows="3"></textarea>
+            </div>
+            <div class="field">
+              <label>Garantía sugerida</label>
+              <textarea class="input" id="svcWarranty" rows="3"></textarea>
+            </div>
+            <div class="field">
+              <label>Condiciones sugeridas</label>
+              <textarea class="input" id="svcTerms" rows="3"></textarea>
+            </div>
+          </div>
+        </section>
+
+        <section class="card section">
+          <div class="sectionHead">
+            <div class="sectionTitle">Plantillas (Notas / Garantías / Condiciones)</div>
+          </div>
+
+          <div class="grid2">
+            <div class="field">
+              <label>Notas</label>
+              <div class="rowBtns" style="gap:8px">
+                <select class="input" id="tplNotesMng"></select>
+                <button class="btn ghost" id="btnAddTplNotes" type="button">+</button>
+                <button class="btn danger" id="btnDelTplNotes" type="button">✕</button>
+              </div>
+              <input class="input" id="tplNotesName" placeholder="Nombre plantilla" style="margin-top:8px" />
+              <textarea class="input" id="tplNotesText" rows="3" placeholder="Texto"></textarea>
+            </div>
+
+            <div class="field">
+              <label>Garantías</label>
+              <div class="rowBtns" style="gap:8px">
+                <select class="input" id="tplWarrantyMng"></select>
+                <button class="btn ghost" id="btnAddTplWarranty" type="button">+</button>
+                <button class="btn danger" id="btnDelTplWarranty" type="button">✕</button>
+              </div>
+              <input class="input" id="tplWarrantyName" placeholder="Nombre plantilla" style="margin-top:8px" />
+              <textarea class="input" id="tplWarrantyText" rows="3" placeholder="Texto"></textarea>
+            </div>
+
+            <div class="field">
+              <label>Condiciones</label>
+              <div class="rowBtns" style="gap:8px">
+                <select class="input" id="tplTermsMng"></select>
+                <button class="btn ghost" id="btnAddTplTerms" type="button">+</button>
+                <button class="btn danger" id="btnDelTplTerms" type="button">✕</button>
+              </div>
+              <input class="input" id="tplTermsName" placeholder="Nombre plantilla" style="margin-top:8px" />
+              <textarea class="input" id="tplTermsText" rows="3" placeholder="Texto"></textarea>
+            </div>
+
+            <div class="field">
+              <label>Guardar cambios</label>
+              <div class="rowBtns">
+                <button class="btn" id="btnSaveCatalog" type="button">Guardar en Firestore</button>
+              </div>
+              <div class="hint">Esto actualiza tu catálogo y plantillas para toda la app.</div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  // bind modal controls
+  $("btnCloseCatalog").addEventListener("click", closeCatalogModal);
+  $("btnAddCategory").addEventListener("click", addCategory);
+  $("btnDelCategory").addEventListener("click", delCategory);
+  $("btnAddService").addEventListener("click", addService);
+  $("btnDelService").addEventListener("click", delService);
+  $("btnSaveCatalog").addEventListener("click", saveCatalogAndTemplates);
+
+  $("catSelect").addEventListener("change", () => loadCategoryToForm($("catSelect").value));
+  $("catName").addEventListener("input", () => {
+    const cat = getSelectedCategory();
+    if (!cat) return;
+    cat.name = $("catName").value;
+    refreshCatalogSelects({ keepSelection: true });
+  });
+
+  $("svcSelect").addEventListener("change", () => loadServiceToForm($("svcSelect").value));
+  ["svcName","svcPrice","svcDesc","svcNotes","svcWarranty","svcTerms"].forEach(id => {
+    $(id).addEventListener("input", () => {
+      const svc = getSelectedService();
+      if (!svc) return;
+      svc.name = ($("svcName").value || "").trim();
+      svc.price = Number($("svcPrice").value || 0);
+      svc.desc = ($("svcDesc").value || "");
+      svc.notes = ($("svcNotes").value || "");
+      svc.warranty = ($("svcWarranty").value || "");
+      svc.terms = ($("svcTerms").value || "");
+      refreshCatalogSelects({ keepSelection: true });
+    });
+  });
+
+  // Templates management binds
+  bindTemplateManager();
+
+  refreshAuthUI();
+}
+
+function openCatalogModal() {
+  ensureCatalogModal();
+  if (!state.user) return alert("Necesitas login para editar el catálogo.");
+  $("catalogPanel").style.display = "flex";
+  refreshCatalogSelects({ keepSelection: false });
+  refreshTemplateManagerUI();
+  loadCategoryToForm($("catSelect").value);
+  loadServiceToForm($("svcSelect").value);
+}
+
+function closeCatalogModal() {
+  if ($("catalogPanel")) $("catalogPanel").style.display = "none";
+}
+
+function getSelectedCategory() {
+  const cfg = state.cfg || defaultCfg();
+  const catId = $("catSelect")?.value || "";
+  return (cfg.catalog?.categories || []).find(c => c.id === catId) || null;
+}
+
+function getSelectedService() {
+  const cat = getSelectedCategory();
+  if (!cat) return null;
+  const svcId = $("svcSelect")?.value || "";
+  return (cat.services || []).find(s => s.id === svcId) || null;
+}
+
+function refreshCatalogSelects({ keepSelection } = { keepSelection: false }) {
+  const cfg = state.cfg || defaultCfg();
+  cfg.catalog = cfg.catalog || defaultCatalog();
+  cfg.catalog.categories = cfg.catalog.categories || [];
+
+  const prevCat = $("catSelect")?.value;
+  const prevSvc = $("svcSelect")?.value;
+
+  // Cats
+  const catSelect = $("catSelect");
+  if (catSelect) {
+    catSelect.innerHTML = "";
+    (cfg.catalog.categories || []).forEach(c => {
+      const o = document.createElement("option");
+      o.value = c.id;
+      o.textContent = c.name;
+      catSelect.appendChild(o);
+    });
+    if (keepSelection && prevCat && [...catSelect.options].some(o => o.value === prevCat)) catSelect.value = prevCat;
+  }
+
+  // Services
+  const cat = getSelectedCategory() || cfg.catalog.categories[0] || null;
+  const svcSelect = $("svcSelect");
+  if (svcSelect) {
+    svcSelect.innerHTML = "";
+    (cat?.services || []).forEach(s => {
+      const o = document.createElement("option");
+      o.value = s.id;
+      o.textContent = s.name;
+      svcSelect.appendChild(o);
+    });
+    if (keepSelection && prevSvc && [...svcSelect.options].some(o => o.value === prevSvc)) svcSelect.value = prevSvc;
+  }
+
+  // Re-index runtime
+  state.cfg = normalizeCfg(cfg);
+  indexCatalog();
+  refreshTemplateUI();
+}
+
+function loadCategoryToForm(catId) {
+  const cfg = state.cfg || defaultCfg();
+  const cat = (cfg.catalog?.categories || []).find(c => c.id === catId) || cfg.catalog?.categories?.[0];
+  if (!cat) return;
+
+  $("catSelect").value = cat.id;
+  $("catName").value = cat.name || "";
+
+  // refresh svc list for this cat
+  refreshCatalogSelects({ keepSelection: true });
+  loadServiceToForm($("svcSelect").value);
+}
+
+function loadServiceToForm(svcId) {
+  const cat = getSelectedCategory();
+  if (!cat) return;
+
+  const svc = (cat.services || []).find(s => s.id === svcId) || cat.services?.[0];
+  if (!svc) {
+    $("svcName").value = "";
+    $("svcPrice").value = "0";
+    $("svcDesc").value = "";
+    $("svcNotes").value = "";
+    $("svcWarranty").value = "";
+    $("svcTerms").value = "";
+    return;
+  }
+
+  $("svcSelect").value = svc.id;
+  $("svcName").value = svc.name || "";
+  $("svcPrice").value = String(Number(svc.price || 0));
+  $("svcDesc").value = svc.desc || "";
+  $("svcNotes").value = svc.notes || "";
+  $("svcWarranty").value = svc.warranty || "";
+  $("svcTerms").value = svc.terms || "";
+}
+
+function addCategory() {
+  const cfg = state.cfg || defaultCfg();
+  cfg.catalog = cfg.catalog || defaultCatalog();
+  cfg.catalog.categories = cfg.catalog.categories || [];
+
+  const id = uid("cat");
+  cfg.catalog.categories.unshift({ id, name: "Nueva categoría", services: [] });
+  state.cfg = normalizeCfg(cfg);
+  refreshCatalogSelects({ keepSelection: false });
+  loadCategoryToForm(id);
+}
+
+function delCategory() {
+  const cfg = state.cfg || defaultCfg();
+  const catId = $("catSelect")?.value;
+  if (!catId) return;
+  if (!confirm("¿Borrar esta categoría y todos sus servicios?")) return;
+
+  cfg.catalog.categories = (cfg.catalog.categories || []).filter(c => c.id !== catId);
+  state.cfg = normalizeCfg(cfg);
+  refreshCatalogSelects({ keepSelection: false });
+  loadCategoryToForm($("catSelect").value);
+}
+
+function addService() {
+  const cfg = state.cfg || defaultCfg();
+  const cat = getSelectedCategory();
+  if (!cat) return;
+
+  const id = uid("svc");
+  cat.services = cat.services || [];
+  cat.services.unshift({
+    id,
+    name: "Nuevo servicio",
+    desc: "",
+    price: 0,
+    notes: "",
+    warranty: "",
+    terms: ""
+  });
+
+  state.cfg = normalizeCfg(cfg);
+  refreshCatalogSelects({ keepSelection: true });
+  $("svcSelect").value = id;
+  loadServiceToForm(id);
+}
+
+function delService() {
+  const cfg = state.cfg || defaultCfg();
+  const cat = getSelectedCategory();
+  if (!cat) return;
+  const svcId = $("svcSelect")?.value;
+  if (!svcId) return;
+  if (!confirm("¿Borrar este servicio?")) return;
+
+  cat.services = (cat.services || []).filter(s => s.id !== svcId);
+  state.cfg = normalizeCfg(cfg);
+  refreshCatalogSelects({ keepSelection: true });
+  loadServiceToForm($("svcSelect").value);
+}
+
+async function saveCatalogAndTemplates() {
+  if (!state.user) return alert("Login requerido.");
+  try {
+    state.cfg = normalizeCfg(state.cfg || defaultCfg());
+    await saveSettingsToFirestore();
+    indexCatalog();
+    refreshTemplateUI();
+    alert("Catálogo + plantillas guardados ✅");
+  } catch (e) {
+    console.error(e);
+    alert("No se pudo guardar. Verifica reglas/permiso en Firestore.");
+  }
+}
+
+/* =========================
+   TEMPLATE MANAGER (dentro del Catalog modal)
+========================= */
+function bindTemplateManager() {
+  // Notes
+  $("tplNotesMng").addEventListener("change", () => loadTemplateToForm("notes"));
+  $("tplNotesName").addEventListener("input", () => saveTemplateDraft("notes"));
+  $("tplNotesText").addEventListener("input", () => saveTemplateDraft("notes"));
+  $("btnAddTplNotes").addEventListener("click", () => addTemplate("notes"));
+  $("btnDelTplNotes").addEventListener("click", () => delTemplate("notes"));
+
+  // Warranty
+  $("tplWarrantyMng").addEventListener("change", () => loadTemplateToForm("warranties"));
+  $("tplWarrantyName").addEventListener("input", () => saveTemplateDraft("warranties"));
+  $("tplWarrantyText").addEventListener("input", () => saveTemplateDraft("warranties"));
+  $("btnAddTplWarranty").addEventListener("click", () => addTemplate("warranties"));
+  $("btnDelTplWarranty").addEventListener("click", () => delTemplate("warranties"));
+
+  // Terms
+  $("tplTermsMng").addEventListener("change", () => loadTemplateToForm("terms"));
+  $("tplTermsName").addEventListener("input", () => saveTemplateDraft("terms"));
+  $("tplTermsText").addEventListener("input", () => saveTemplateDraft("terms"));
+  $("btnAddTplTerms").addEventListener("click", () => addTemplate("terms"));
+  $("btnDelTplTerms").addEventListener("click", () => delTemplate("terms"));
+}
+
+function refreshTemplateManagerUI() {
+  const cfg = state.cfg || defaultCfg();
+  const t = cfg.templates || defaultTemplates();
+
+  const fill = (sel, arr) => {
+    sel.innerHTML = "";
+    arr.forEach(x => {
+      const o = document.createElement("option");
+      o.value = x.id;
+      o.textContent = x.name;
+      sel.appendChild(o);
+    });
+  };
+
+  fill($("tplNotesMng"), t.notes || []);
+  fill($("tplWarrantyMng"), t.warranties || []);
+  fill($("tplTermsMng"), t.terms || []);
+
+  loadTemplateToForm("notes");
+  loadTemplateToForm("warranties");
+  loadTemplateToForm("terms");
+}
+
+function loadTemplateToForm(kind) {
+  const cfg = state.cfg || defaultCfg();
+  cfg.templates = cfg.templates || defaultTemplates();
+
+  const selId = kind === "notes" ? "tplNotesMng" : (kind === "warranties" ? "tplWarrantyMng" : "tplTermsMng");
+  const nameId = kind === "notes" ? "tplNotesName" : (kind === "warranties" ? "tplWarrantyName" : "tplTermsName");
+  const textId = kind === "notes" ? "tplNotesText" : (kind === "warranties" ? "tplWarrantyText" : "tplTermsText");
+
+  const sel = $(selId);
+  const arr = cfg.templates[kind] || [];
+  const chosen = sel?.value || arr[0]?.id;
+
+  const found = arr.find(x => x.id === chosen) || arr[0];
+  if (!found) { $(nameId).value = ""; $(textId).value = ""; return; }
+
+  sel.value = found.id;
+  $(nameId).value = found.name || "";
+  $(textId).value = found.text || "";
+}
+
+function saveTemplateDraft(kind) {
+  const cfg = state.cfg || defaultCfg();
+  cfg.templates = cfg.templates || defaultTemplates();
+
+  const selId = kind === "notes" ? "tplNotesMng" : (kind === "warranties" ? "tplWarrantyMng" : "tplTermsMng");
+  const nameId = kind === "notes" ? "tplNotesName" : (kind === "warranties" ? "tplWarrantyName" : "tplTermsName");
+  const textId = kind === "notes" ? "tplNotesText" : (kind === "warranties" ? "tplWarrantyText" : "tplTermsText");
+
+  const arr = cfg.templates[kind] || [];
+  const id_ = $(selId)?.value;
+  const found = arr.find(x => x.id === id_);
+  if (!found) return;
+
+  found.name = ($(nameId).value || "").trim() || "Plantilla";
+  found.text = ($(textId).value || "");
+
+  state.cfg = normalizeCfg(cfg);
+  refreshTemplateUI();
+  refreshTemplateManagerUI(); // mantiene nombres actualizados
+}
+
+function addTemplate(kind) {
+  const cfg = state.cfg || defaultCfg();
+  cfg.templates = cfg.templates || defaultTemplates();
+
+  const id_ = uid("tpl");
+  cfg.templates[kind] = cfg.templates[kind] || [];
+  cfg.templates[kind].unshift({ id: id_, name: "Nueva plantilla", text: "" });
+
+  state.cfg = normalizeCfg(cfg);
+  refreshTemplateManagerUI();
+  refreshTemplateUI();
+
+  const selId = kind === "notes" ? "tplNotesMng" : (kind === "warranties" ? "tplWarrantyMng" : "tplTermsMng");
+  $(selId).value = id_;
+  loadTemplateToForm(kind);
+}
+
+function delTemplate(kind) {
+  const cfg = state.cfg || defaultCfg();
+  cfg.templates = cfg.templates || defaultTemplates();
+
+  const selId = kind === "notes" ? "tplNotesMng" : (kind === "warranties" ? "tplWarrantyMng" : "tplTermsMng");
+  const id_ = $(selId)?.value;
+  if (!id_) return;
+  if (!confirm("¿Borrar esta plantilla?")) return;
+
+  cfg.templates[kind] = (cfg.templates[kind] || []).filter(x => x.id !== id_);
+  state.cfg = normalizeCfg(cfg);
+  refreshTemplateManagerUI();
+  refreshTemplateUI();
+}
+
+/* =========================
+   ITEMS RENDER (NOW: Category + Service + Description)
 ========================= */
 function renderItems() {
   const wrap = $("items");
   wrap.innerHTML = "";
+
+  const cfg = state.cfg || defaultCfg();
+  const cats = cfg.catalog?.categories || [];
 
   state.current.items.forEach((it) => {
     const row = document.createElement("div");
     row.className = "tRow";
     row.dataset.itemId = it.id;
 
+    // === Catalog selects (cat + service)
+    const catSel = document.createElement("select");
+    catSel.className = "input";
+    const catEmpty = document.createElement("option");
+    catEmpty.value = "";
+    catEmpty.textContent = "Categoría (opcional)";
+    catSel.appendChild(catEmpty);
+
+    cats.forEach(c => {
+      const o = document.createElement("option");
+      o.value = c.id;
+      o.textContent = c.name;
+      catSel.appendChild(o);
+    });
+
+    // Persist selection
+    it.catId = it.catId || "";
+    catSel.value = it.catId;
+
+    const svcSel = document.createElement("select");
+    svcSel.className = "input";
+    const svcEmpty = document.createElement("option");
+    svcEmpty.value = "";
+    svcEmpty.textContent = "Servicio (opcional)";
+    svcSel.appendChild(svcEmpty);
+
+    function fillServices(catId, keepSvc = false) {
+      const prev = it.svcId || "";
+      svcSel.innerHTML = "";
+      svcSel.appendChild(svcEmpty.cloneNode(true));
+
+      const cat = cats.find(x => x.id === catId);
+      (cat?.services || []).forEach(s => {
+        const o = document.createElement("option");
+        o.value = s.id;
+        o.textContent = s.name;
+        svcSel.appendChild(o);
+      });
+
+      if (keepSvc && prev && [...svcSel.options].some(o => o.value === prev)) {
+        svcSel.value = prev;
+      } else {
+        svcSel.value = it.svcId || "";
+      }
+    }
+
+    fillServices(it.catId, true);
+
+    // === Description input (manual override always allowed)
     const desc = document.createElement("input");
     desc.className = "input";
     desc.placeholder = "Descripción";
     desc.value = it.desc || "";
     desc.addEventListener("input", () => { it.desc = desc.value; });
 
+    // When category changes
+    catSel.addEventListener("change", () => {
+      it.catId = catSel.value || "";
+      // reset service if category changed
+      it.svcId = "";
+      fillServices(it.catId, false);
+    });
+
+    // When service selected: autofill desc + price + (opcional: sugerir notes/terms)
+    svcSel.addEventListener("change", () => {
+      it.svcId = svcSel.value || "";
+      if (!it.svcId) return;
+
+      const svc = state.catalogIndex.svcById.get(it.svcId);
+      if (!svc) return;
+
+      // autofill
+      it.desc = svc.desc || svc.name || "";
+      it.price = Number(svc.price || 0);
+
+      desc.value = it.desc;
+      price.value = String(it.price);
+
+      // sugerencias “no intrusivas”: solo si notas/terms están vacías
+      if ((!state.current.notes || !state.current.notes.trim()) && svc.notes) {
+        state.current.notes = svc.notes;
+        $("notes").value = svc.notes;
+      }
+      // garantía sugerida va a Notas (append) si vacío
+      if (svc.warranty && (!state.current.notes || !state.current.notes.includes(svc.warranty))) {
+        if (!state.current.notes.trim()) {
+          state.current.notes = svc.warranty;
+        } else {
+          state.current.notes = (state.current.notes.trim() + "\n\n" + svc.warranty).trim();
+        }
+        $("notes").value = state.current.notes;
+      }
+      if ((!state.current.terms || !state.current.terms.trim()) && svc.terms) {
+        state.current.terms = svc.terms;
+        $("terms").value = svc.terms;
+      }
+
+      updateTotalsLive();
+    });
+
+    // === Qty/Price/Total
     const qty = document.createElement("input");
     qty.className = "input";
     qty.type = "number";
@@ -399,17 +1222,31 @@ function renderItems() {
     del.addEventListener("click", () => {
       state.current.items = state.current.items.filter(x => x.id !== it.id);
       if (state.current.items.length === 0) {
-        state.current.items.push({ id: uid("it"), desc: "", qty: 1, price: 0 });
+        state.current.items.push({ id: uid("it"), desc: "", qty: 1, price: 0, catId: "", svcId: "" });
       }
       renderItems();
       updateTotalsLive();
     });
 
-    row.appendChild(desc);
+    // Layout: Descripción column ahora será “Catalog + Desc”
+    const descWrap = document.createElement("div");
+    descWrap.style.display = "grid";
+    descWrap.style.gap = "6px";
+    descWrap.style.gridTemplateColumns = "1fr 1fr";
+    descWrap.appendChild(catSel);
+    descWrap.appendChild(svcSel);
+
+    const descFull = document.createElement("div");
+    descFull.style.gridColumn = "1 / -1";
+    descFull.appendChild(desc);
+    descWrap.appendChild(descFull);
+
+    row.appendChild(descWrap);
     row.appendChild(qty);
     row.appendChild(price);
     row.appendChild(total);
     row.appendChild(del);
+
     wrap.appendChild(row);
   });
 }
@@ -480,7 +1317,6 @@ async function saveCurrentToHistory({ forceNumber = false } = {}) {
 
   await setDoc(refDoc, payload, { merge: true });
 
-  // refresh cache
   await loadAllFromFirestore();
   state.activeDocId = docId;
 }
@@ -491,6 +1327,16 @@ async function loadDocFromHistory(id) {
 
   state.activeDocId = d.id;
   state.current = JSON.parse(JSON.stringify(d));
+
+  // compat: docs viejos sin catId/svcId
+  state.current.items = (state.current.items || []).map(it => ({
+    id: it.id || uid("it"),
+    desc: it.desc || "",
+    qty: Number(it.qty || 0) || 1,
+    price: Number(it.price || 0),
+    catId: it.catId || "",
+    svcId: it.svcId || ""
+  }));
 
   bindDocHeader();
   renderItems();
@@ -525,7 +1371,12 @@ function duplicateDoc() {
   copy.status = "PENDIENTE";
   copy.createdAt = new Date().toISOString();
   copy.updatedAt = new Date().toISOString();
-  copy.items = copy.items.map(it => ({ ...it, id: uid("it") }));
+  copy.items = (copy.items || []).map(it => ({
+    ...it,
+    id: uid("it"),
+    catId: it.catId || "",
+    svcId: it.svcId || ""
+  }));
 
   state.activeDocId = null;
   state.current = copy;
@@ -660,23 +1511,19 @@ function buildPdfDoc() {
   const H = docp.internal.pageSize.getHeight();
   const margin = 42;
 
-  // Header line
   docp.setDrawColor(220);
   docp.setLineWidth(1);
   docp.line(margin, 110, W - margin, 110);
 
-  // Title left
   docp.setFont("helvetica", "bold");
   docp.setFontSize(20);
   docp.text(state.current.type === "FAC" ? "FACTURA" : "COTIZACIÓN", margin, 64);
 
-  // No. y Fecha separados
   docp.setFont("helvetica", "normal");
   docp.setFontSize(10);
   docp.text(`No.: ${state.current.number || "AUTO"}`, margin, 86);
   docp.text(`Fecha: ${state.current.date || ""}`, margin, 102);
 
-  // Right header + logo sin overlap
   const rightX = W - margin;
   let textTopY = 52;
 
@@ -704,7 +1551,6 @@ function buildPdfDoc() {
   if (biz.phone) { docp.text(`Tel: ${biz.phone}`, rightX, topY, { align: "right" }); topY += 12; }
   if (biz.email) { docp.text(`Email: ${biz.email}`, rightX, topY, { align: "right" }); topY += 12; }
 
-  // Client box
   const boxY = 132;
   docp.setFillColor(245, 245, 245);
   docp.setDrawColor(230);
@@ -725,8 +1571,7 @@ function buildPdfDoc() {
   docp.setFont("helvetica", "normal");
   docp.text(state.current.validUntil || "—", W - margin - 160, boxY + 40);
 
-  // Items table
-  const items = state.current.items.map(it => {
+  const items = (state.current.items || []).map(it => {
     const qty = Number(it.qty || 0);
     const price = Number(it.price || 0);
     return [it.desc || "", String(qty), fmtMoney(price), fmtMoney(qty * price)];
@@ -749,7 +1594,6 @@ function buildPdfDoc() {
 
   const afterTableY = docp.lastAutoTable.finalY + 14;
 
-  // Totals box
   const totW = 220;
   const totX = W - margin - totW;
   const totY = afterTableY;
@@ -770,7 +1614,6 @@ function buildPdfDoc() {
   docp.text("TOTAL:", totX + 12, totY + 60);
   docp.text(fmtMoney(state.current.totals.grand), totX + totW - 12, totY + 60, { align: "right" });
 
-  // Notes / terms
   let textY = totY + 98;
   docp.setFont("helvetica", "bold");
   docp.text("Notas", margin, textY);
@@ -783,7 +1626,6 @@ function buildPdfDoc() {
   docp.setFont("helvetica", "normal");
   docp.text((state.current.terms || "—").slice(0, 650), margin, textY + 14, { maxWidth: W - 2 * margin });
 
-  // Footer
   docp.setFontSize(9);
   docp.setTextColor(120);
   docp.text(
@@ -810,7 +1652,6 @@ function makePreview() {
 async function confirmPDF() {
   await saveCurrentToHistory({ forceNumber: true });
 
-  // Si hay logoUrl pero no dataUrl, intenta cachearlo
   const cfg = state.cfg || defaultCfg();
   if (cfg?.biz?.logoUrl && !cfg.biz.logoDataUrl) {
     try { cfg.biz.logoDataUrl = await urlToDataUrl(cfg.biz.logoUrl); } catch {}
@@ -921,8 +1762,7 @@ async function addCustomer() {
    VENDORS (mínimo, funcional)
 ========================= */
 function renderVendors() {
-  // Si tu HTML de Vendors está “en construcción”, no lo rompemos. (lo dejamos como estaba)
-  // Cuando quieras lo habilitamos con Firestore igual que customers.
+  // placeholder — no tocamos tu Vendors.
 }
 
 /* =========================
@@ -956,7 +1796,6 @@ async function saveBiz() {
 
   const file = $("bizLogo").files && $("bizLogo").files[0];
   if (file) {
-    // Subir a Storage
     const path = `users/${state.user.uid}/logo_${Date.now()}_${file.name}`;
     const r = ref(storage, path);
     await uploadBytes(r, file);
@@ -964,15 +1803,16 @@ async function saveBiz() {
 
     cfg.biz.logoUrl = url;
 
-    // Cache DataURL para PDF (local, no hace falta guardarlo en Firestore)
     try { cfg.biz.logoDataUrl = await fileToDataUrl(file); } catch {}
   }
 
-  state.cfg = cfg;
+  state.cfg = normalizeCfg(cfg);
   await saveSettingsToFirestore();
 
+  indexCatalog();
   refreshKPIs();
   updateTotalsLive();
+  refreshTemplateUI();
   alert("Empresa guardada ✅");
   closeBiz();
 }
@@ -987,27 +1827,26 @@ function renderInvoicing() {
   updateTotalsLive();
   renderHistory();
   refreshKPIs();
+  ensureTemplateUI();
+  ensureCatalogModal();
 }
 
 /* =========================
    EVENTS
 ========================= */
 function bindEvents() {
-  // Tabs principales
   $("mainTabs").addEventListener("click", (e) => {
     const b = e.target.closest(".tab");
     if (!b) return;
     setView(b.dataset.view);
   });
 
-  // Subtabs Invoicing
   $("invoiceSubtabs").addEventListener("click", (e) => {
     const b = e.target.closest(".subtab");
     if (!b) return;
     setSub(b.dataset.sub);
   });
 
-  // New
   $("btnNew").addEventListener("click", () => {
     state.activeDocId = null;
     state.current = newDoc();
@@ -1015,13 +1854,11 @@ function bindEvents() {
     setSub("confirm");
   });
 
-  // Config
   $("btnSettings").addEventListener("click", openBiz);
   $("btnOpenConfig")?.addEventListener("click", openBiz);
   $("btnCloseBiz").addEventListener("click", closeBiz);
   $("btnSaveBiz").addEventListener("click", saveBiz);
 
-  // Cambios de header
   [
     "docType","docNumber","docDate","docStatus",
     "clientName","clientContact","clientAddr","validUntil",
@@ -1037,9 +1874,8 @@ function bindEvents() {
     });
   });
 
-  // Items
   $("btnAddItem").addEventListener("click", () => {
-    state.current.items.push({ id: uid("it"), desc: "", qty: 1, price: 0 });
+    state.current.items.push({ id: uid("it"), desc: "", qty: 1, price: 0, catId: "", svcId: "" });
     renderItems();
     updateTotalsLive();
   });
@@ -1059,10 +1895,8 @@ function bindEvents() {
   $("btnDuplicate").addEventListener("click", duplicateDoc);
   $("btnDelete").addEventListener("click", deleteDocCloud);
 
-  // Historial
   $("histSearch").addEventListener("input", renderHistory);
   $("btnExportHist").addEventListener("click", () => {
-    // Export simple: descarga json de cache (útil)
     const blob = new Blob([JSON.stringify(state.docs || [], null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -1074,22 +1908,18 @@ function bindEvents() {
     if (!state.user) return alert("Login requerido.");
     if (!confirm("¿Vaciar historial completo?")) return;
 
-    // borra docs en lote (simple, uno a uno)
     for (const d of (state.docs || [])) {
       await deleteDoc(doc(db, `${userBase(state.user.uid)}/docs/${d.id}`));
     }
     await loadAllFromFirestore();
   });
 
-  // Preview
   $("btnRefreshPreview").addEventListener("click", makePreview);
   $("btnConfirmFromPreview").addEventListener("click", confirmPDF);
 
-  // Customers
   $("btnAddCustomer").addEventListener("click", addCustomer);
   $("cSearch").addEventListener("input", renderCustomers);
 
-  // Hub
   const hubBtn = $("hubBackBtn");
   if (hubBtn) hubBtn.href = HUB_URL;
 }
@@ -1099,24 +1929,27 @@ function bindEvents() {
 ========================= */
 function boot() {
   ensureAuthButtons();
+  ensureCatalogModal();
+  ensureTemplateUI();
   bindEvents();
+
+  state.cfg = normalizeCfg(defaultCfg());
+  indexCatalog();
 
   state.current = newDoc();
   setView("invoicing");
   setSub("confirm");
 
-  // Auth listener
   onAuthStateChanged(auth, async (user) => {
     state.user = user || null;
     refreshAuthUI();
 
     if (state.user) {
       await loadAllFromFirestore();
-      // Asegura cfg en memoria
-      if (!state.cfg) state.cfg = defaultCfg();
+      if (!state.cfg) state.cfg = normalizeCfg(defaultCfg());
     } else {
-      // sin sesión, dejamos defaults locales
-      state.cfg = defaultCfg();
+      state.cfg = normalizeCfg(defaultCfg());
+      indexCatalog();
       state.docs = [];
       state.customers = [];
       state.vendors = [];
@@ -1124,11 +1957,12 @@ function boot() {
       renderHistory();
       renderCustomers();
       renderReporting();
+      refreshTemplateUI();
     }
 
-    // refresca app
     state.current.taxRate = Number(state.cfg.taxRate || 11.5);
     updateTotalsLive();
+    renderItems();
   });
 }
 
