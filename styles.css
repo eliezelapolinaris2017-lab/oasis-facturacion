@@ -3,12 +3,11 @@
   --bg:#ffffff;
   --bg2:#f6f7fb;
 
-  /* ✅ CARDS DARK GRADIENT (NEW) */
-  --card: linear-gradient(180deg, #0f1115 0%, #0b0d12 100%);
-  --cardBorder: rgba(255,255,255,.10);
-  --cardGlow: radial-gradient(600px 180px at 20% 0%, rgba(214,177,90,.12), transparent 55%);
-  --cardText: rgba(255,255,255,.92);
-  --cardMuted: rgba(255,255,255,.65);
+  /* ✅ CARDS UNIFORME (CLARO + DEGRADADO SUAVE) */
+  --card: linear-gradient(180deg, rgba(255,255,255,.92) 0%, rgba(245,247,251,.92) 100%);
+  --card2: linear-gradient(180deg, rgba(255,255,255,.78) 0%, rgba(246,247,251,.78) 100%);
+  --cardGlow: radial-gradient(900px 220px at 20% 0%, rgba(214,177,90,.14), transparent 60%);
+  --cardLine: rgba(0,0,0,.22);
 
   /* borde negro fino, elegante (no “wireframe”) */
   --line: rgba(0,0,0,.35);
@@ -17,6 +16,7 @@
   --muted:rgba(11,18,32,.62);
 
   --shadow:0 14px 40px rgba(17,24,39,.08);
+  --shadow2:0 18px 60px rgba(17,24,39,.10);
   --r:18px;
 
   /* ===== KPI (SE QUEDAN COLOR) ===== */
@@ -119,27 +119,16 @@ body{
   background:rgba(214,177,90,.16);
 }
 
-/* ===== CARDS / SECTIONS (NOW DARK) ===== */
+/* ===== CARDS / SECTIONS (UNIFORME + LEGIBLE) ===== */
 .gridCards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
 @media(max-width:980px){.gridCards{grid-template-columns:1fr}}
 
 .card{
-  /* ✅ cambio: cards oscuras con degradado */
-  border:1px solid var(--cardBorder);
+  border:1px solid var(--cardLine);
   background: var(--cardGlow), var(--card);
   border-radius:var(--r);
-  box-shadow:0 18px 60px rgba(0,0,0,.45);
-  color:var(--cardText);
-}
-
-/* ✅ texto dentro de cards */
-.card .sectionTitle,
-.card .pill{
-  color:var(--cardText);
-}
-.card .hint,
-.card .muted{
-  color:var(--cardMuted);
+  box-shadow:var(--shadow2);
+  backdrop-filter: blur(10px);
 }
 
 /* ===== KPI (COLOR) ===== */
@@ -173,8 +162,8 @@ body{
 .sectionTitle{font-weight:900;color:var(--text)}
 .pill{
   padding:6px 10px;border-radius:999px;
-  border:1px solid var(--line);
-  background:rgba(11,18,32,.02);
+  border:1px solid var(--cardLine);
+  background:var(--card2);
   font-size:12px;color:var(--text);
 }
 .rowBtns{display:flex;gap:10px;flex-wrap:wrap}
@@ -200,7 +189,7 @@ body{
 @media(max-width:980px){.grid4{grid-template-columns:1fr 1fr}}
 @media(max-width:860px){.grid2,.grid4{grid-template-columns:1fr}}
 
-/* ===== ITEMS TABLE (HEADER TUNED FOR DARK CARDS) ===== */
+/* ===== ITEMS TABLE ===== */
 .table{margin-top:10px}
 .tHead,.tRow{
   display:grid;grid-template-columns:1fr 90px 110px 110px 44px;gap:8px;align-items:center
@@ -209,26 +198,14 @@ body{
   color:rgba(11,18,32,.70);
   font-size:12px;
   padding:8px;
-  border:1px solid var(--line);
-  background:rgba(11,18,32,.02);
+  border:1px solid var(--cardLine);
+  background:var(--card2);
   border-radius:12px;
 }
-
-/* ✅ si la tabla vive dentro de una card oscura, el header se ve bien */
-.card .tHead{
-  background:rgba(255,255,255,.06);
-  color:var(--cardMuted);
-  border-color:var(--cardBorder);
-}
-
 .tRow{
   padding:10px 8px;
   border-bottom:1px dashed rgba(0,0,0,.18);
 }
-.card .tRow{
-  border-bottom:1px dashed rgba(255,255,255,.14);
-}
-
 .del{
   width:44px;height:40px;border-radius:12px;
   border:1px solid var(--line);
@@ -241,7 +218,7 @@ body{
 /* ===== TOTALS ===== */
 .totals{
   margin-top:12px;
-  border-top:1px solid var(--line);
+  border-top:1px solid var(--cardLine);
   padding-top:12px;
   max-width:440px;
   margin-left:auto
@@ -253,15 +230,15 @@ body{
 .tableWrap{
   overflow:auto;
   border-radius:14px;
-  border:1px solid var(--line);
+  border:1px solid var(--cardLine);
   margin-top:10px;
-  background:#fff;
+  background:rgba(255,255,255,.88);
 }
 .histTable{
   width:100%;
   border-collapse:collapse;
   min-width:900px;
-  background:#fff;
+  background:transparent;
 }
 .histTable th,.histTable td{
   padding:10px;
@@ -273,23 +250,6 @@ body{
   font-size:12px;
   color:rgba(11,18,32,.70);
   background:rgba(11,18,32,.03);
-}
-
-/* ✅ si el historial está dentro de card oscura, ajusta el wrapper/tabla */
-.card .tableWrap{
-  background:linear-gradient(180deg,#0f1115,#0b0d12);
-  border-color:var(--cardBorder);
-}
-.card .histTable{
-  background:transparent;
-}
-.card .histTable th{
-  background:rgba(255,255,255,.06);
-  color:var(--cardMuted);
-}
-.card .histTable td{
-  color:var(--cardText);
-  border-bottom:1px solid rgba(255,255,255,.10);
 }
 
 /* ===== BADGES (LIGHT) ===== */
@@ -328,10 +288,10 @@ body{
 
 /* ===== PREVIEW ===== */
 .previewBox{
-  border:1px solid var(--line);
+  border:1px solid var(--cardLine);
   border-radius:14px;
   overflow:hidden;
-  background:#fff;
+  background:rgba(255,255,255,.90);
   height:72vh;
 }
 .previewBox iframe{width:100%;height:100%;border:0}
