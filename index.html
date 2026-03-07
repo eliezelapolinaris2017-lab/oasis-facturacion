@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Nexus Invoicing</title>
 
-  <link rel="stylesheet" href="styles.css?v=20260114-2200" />
+  <link rel="stylesheet" href="styles.css?v=20260114-2300" />
 
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
@@ -26,7 +26,7 @@
       <nav class="sidebarNav tabs" id="mainTabs">
         <button class="sideLink tab is-active" data-view="invoicing" type="button">Invoicing</button>
         <button class="sideLink tab" data-view="customers" type="button">Customers</button>
-        <button class="sideLink tab" data-view="vendors" type="button">Vendors</button>
+        <button class="sideLink tab" data-view="history" type="button">History</button>
         <button class="sideLink tab" data-view="reporting" type="button">Reporting</button>
         <button class="sideLink tab" data-view="configuration" type="button">Configuration</button>
       </nav>
@@ -61,34 +61,54 @@
             </div>
 
             <div class="subtabs" id="invoiceSubtabs">
-              <button class="subtab is-active" data-sub="confirm" type="button">Confirm</button>
+              <button class="subtab is-active" data-sub="confirm" type="button">Editor</button>
               <button class="subtab" data-sub="preview" type="button">Preview</button>
-              <button class="subtab" data-sub="history" type="button">History</button>
             </div>
           </div>
 
-          <section class="gridCards">
-            <article class="card kpi kpi-a">
-              <div class="kpiLabel">Docs guardados</div>
-              <div class="kpiValue" id="kpiDocs">0</div>
-              <div class="kpiHint">Historial local</div>
+          <!-- NUEVO BLOQUE VISUAL -->
+          <section class="dashboardHero">
+            <article class="radialCard">
+              <div class="radialWrap">
+                <div class="radial ring-a">
+                  <div class="radialInner">
+                    <strong id="kpiDocs">0</strong>
+                    <span>Docs</span>
+                  </div>
+                </div>
+              </div>
+              <div class="radialMeta">
+                <div class="radialTitle">Documentos</div>
+                <div class="radialHint">Guardados en historial</div>
+              </div>
             </article>
 
-            <article class="card kpi kpi-b">
-              <div class="kpiLabel">Total actual</div>
-              <div class="kpiValue" id="kpiLastTotal">$0.00</div>
-              <div class="kpiHint">Documento en pantalla</div>
+            <article class="radialCard">
+              <div class="radialWrap">
+                <div class="radial ring-b">
+                  <div class="radialInner">
+                    <strong id="kpiTax">11.5%</strong>
+                    <span>IVU</span>
+                  </div>
+                </div>
+              </div>
+              <div class="radialMeta">
+                <div class="radialTitle">Tax Rate</div>
+                <div class="radialHint">Configuración activa</div>
+              </div>
             </article>
 
-            <article class="card kpi kpi-c">
-              <div class="kpiLabel">IVU</div>
-              <div class="kpiValue" id="kpiTax">11.5%</div>
-              <div class="kpiHint">Configurable</div>
+            <article class="valueCard">
+              <div class="valueEyebrow">Total actual</div>
+              <div class="valueBig" id="kpiLastTotal">$0.00</div>
+              <div class="valueHint">Documento en edición</div>
             </article>
           </section>
 
+          <!-- CONFIRM PANEL -->
           <section class="panel is-active" id="panel-confirm">
-            <section class="card section">
+
+            <section class="card section formShell">
               <div class="sectionHead">
                 <div class="sectionTitle">Documento</div>
                 <div class="pill" id="docModePill">Nuevo</div>
@@ -143,7 +163,7 @@
               </div>
             </section>
 
-            <section class="card section">
+            <section class="card section formShell">
               <div class="sectionHead">
                 <div class="sectionTitle">Items</div>
                 <div class="rowBtns">
@@ -164,20 +184,20 @@
                 <div id="items"></div>
               </div>
 
-              <div class="totals">
-                <div class="totRow"><span>Subtotal</span><strong id="subTotal">$0.00</strong></div>
-                <div class="totRow"><span>IVU</span><strong id="taxTotal">$0.00</strong></div>
-                <div class="totRow grand"><span>Total</span><strong id="grandTotal">$0.00</strong></div>
+              <div class="totals modernTotals">
+                <div class="totChip"><span>Subtotal</span><strong id="subTotal">$0.00</strong></div>
+                <div class="totChip"><span>IVU</span><strong id="taxTotal">$0.00</strong></div>
+                <div class="totChip grand"><span>Total</span><strong id="grandTotal">$0.00</strong></div>
               </div>
 
               <div class="grid2">
                 <div class="field">
                   <label>Notas</label>
-                  <textarea class="input" id="notes" rows="3" placeholder="Notas / garantía / depósitos..."></textarea>
+                  <textarea class="input" id="notes" rows="4" placeholder="Notas / garantía / depósitos..."></textarea>
                 </div>
                 <div class="field">
                   <label>Condiciones</label>
-                  <textarea class="input" id="terms" rows="3" placeholder="Términos y condiciones..."></textarea>
+                  <textarea class="input" id="terms" rows="4" placeholder="Términos y condiciones..."></textarea>
                 </div>
               </div>
 
@@ -188,6 +208,7 @@
             </section>
           </section>
 
+          <!-- PREVIEW PANEL -->
           <section class="panel" id="panel-preview">
             <section class="card section">
               <div class="sectionHead">
@@ -205,30 +226,6 @@
               <div class="hint">Tip: logo ideal = PNG transparente.</div>
             </section>
           </section>
-
-          <section class="panel" id="panel-history">
-            <section class="card section">
-              <div class="sectionHead">
-                <div class="sectionTitle">Historial</div>
-                <div class="histActions">
-                  <input class="input small" id="histSearch" placeholder="Buscar: número o cliente" />
-                  <button class="btn ghost" id="btnExportHist" type="button">Exportar</button>
-                  <button class="btn ghost" id="btnClearHist" type="button">Vaciar</button>
-                </div>
-              </div>
-
-              <div class="tableWrap">
-                <table class="histTable">
-                  <thead>
-                    <tr>
-                      <th>Tipo</th><th>No.</th><th>Fecha</th><th>Cliente</th><th>Estado</th><th>Total</th><th>Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody id="histBody"></tbody>
-                </table>
-              </div>
-            </section>
-          </section>
         </section>
 
         <!-- CUSTOMERS -->
@@ -240,25 +237,36 @@
             </div>
           </div>
 
-          <section class="gridCards">
-            <article class="card kpi kpi-b">
-              <div class="kpiLabel">Clientes</div>
-              <div class="kpiValue" id="kpiCustomers">0</div>
-              <div class="kpiHint">Local</div>
+          <section class="dashboardHero dashboardHero-small">
+            <article class="radialCard">
+              <div class="radialWrap">
+                <div class="radial ring-c">
+                  <div class="radialInner">
+                    <strong id="kpiCustomers">0</strong>
+                    <span>Clientes</span>
+                  </div>
+                </div>
+              </div>
+              <div class="radialMeta">
+                <div class="radialTitle">Base activa</div>
+                <div class="radialHint">Clientes locales</div>
+              </div>
             </article>
-            <article class="card kpi kpi-c">
-              <div class="kpiLabel">Acción</div>
-              <div class="kpiValue">Rápida</div>
-              <div class="kpiHint">Guardar / Usar</div>
+
+            <article class="valueCard mini">
+              <div class="valueEyebrow">Acción</div>
+              <div class="valueBig">Rápida</div>
+              <div class="valueHint">Guardar / Usar</div>
             </article>
-            <article class="card kpi kpi-a">
-              <div class="kpiLabel">Control</div>
-              <div class="kpiValue">Nexus</div>
-              <div class="kpiHint">Sin caos</div>
+
+            <article class="valueCard mini">
+              <div class="valueEyebrow">Control</div>
+              <div class="valueBig">Nexus</div>
+              <div class="valueHint">Sin caos</div>
             </article>
           </section>
 
-          <section class="card section">
+          <section class="card section formShell">
             <div class="sectionHead">
               <div class="sectionTitle">Nuevo cliente</div>
               <div class="rowBtns">
@@ -286,25 +294,38 @@
                 <tbody id="customersBody"></tbody>
               </table>
             </div>
-
-            <div class="hint">“Usar” rellena el cliente en Invoicing y te lleva allí.</div>
           </section>
         </section>
 
-        <!-- VENDORS -->
-        <section class="view" id="view-vendors">
+        <!-- HISTORY -->
+        <section class="view" id="view-history">
           <div class="headerRow">
             <div class="titleBlock">
-              <div class="h1">Vendors</div>
-              <div class="muted">Gestión de suplidores.</div>
+              <div class="h1">History</div>
+              <div class="muted">Todos los documentos en una sola bandeja.</div>
             </div>
           </div>
 
           <section class="card section">
             <div class="sectionHead">
-              <div class="sectionTitle">Vendors</div>
+              <div class="sectionTitle">Historial</div>
+              <div class="histActions">
+                <input class="input small" id="histSearch" placeholder="Buscar: número o cliente" />
+                <button class="btn ghost" id="btnExportHist" type="button">Exportar</button>
+                <button class="btn ghost" id="btnClearHist" type="button">Vaciar</button>
+              </div>
             </div>
-            <div class="muted">Módulo listo para expandir.</div>
+
+            <div class="tableWrap">
+              <table class="histTable">
+                <thead>
+                  <tr>
+                    <th>Tipo</th><th>No.</th><th>Fecha</th><th>Cliente</th><th>Estado</th><th>Total</th><th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="histBody"></tbody>
+              </table>
+            </div>
           </section>
         </section>
 
@@ -313,25 +334,36 @@
           <div class="headerRow">
             <div class="titleBlock">
               <div class="h1">Reporting</div>
-              <div class="muted">Resumen local: pendientes vs pagadas.</div>
+              <div class="muted">Vista financiera rápida y limpia.</div>
             </div>
           </div>
 
-          <section class="gridCards">
-            <article class="card kpi kpi-a">
-              <div class="kpiLabel">Pendientes</div>
-              <div class="kpiValue" id="repPending">$0.00</div>
-              <div class="kpiHint">Total acumulado</div>
+          <section class="dashboardHero">
+            <article class="radialCard">
+              <div class="radialWrap">
+                <div class="radial ring-a">
+                  <div class="radialInner">
+                    <strong id="repDocs">0</strong>
+                    <span>Docs</span>
+                  </div>
+                </div>
+              </div>
+              <div class="radialMeta">
+                <div class="radialTitle">Total de documentos</div>
+                <div class="radialHint">En historial</div>
+              </div>
             </article>
-            <article class="card kpi kpi-b">
-              <div class="kpiLabel">Pagadas</div>
-              <div class="kpiValue" id="repPaid">$0.00</div>
-              <div class="kpiHint">Total acumulado</div>
+
+            <article class="valueCard">
+              <div class="valueEyebrow">Pendientes</div>
+              <div class="valueBig" id="repPending">$0.00</div>
+              <div class="valueHint">Pendiente por cobrar</div>
             </article>
-            <article class="card kpi kpi-c">
-              <div class="kpiLabel">Docs</div>
-              <div class="kpiValue" id="repDocs">0</div>
-              <div class="kpiHint">Historial</div>
+
+            <article class="valueCard">
+              <div class="valueEyebrow">Pagadas</div>
+              <div class="valueBig" id="repPaid">$0.00</div>
+              <div class="valueHint">Cobrado acumulado</div>
             </article>
           </section>
         </section>
@@ -360,7 +392,6 @@
     </section>
   </div>
 
-  <!-- SETTINGS MODAL -->
   <div class="modal" id="settingsPanel" style="display:none">
     <div class="modalCard">
       <div class="modalHead">
@@ -407,6 +438,6 @@
     </div>
   </div>
 
-  <script type="module" src="app.js?v=20260114-2200"></script>
+  <script type="module" src="app.js?v=20260114-2300"></script>
 </body>
 </html>
