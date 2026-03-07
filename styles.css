@@ -28,8 +28,6 @@ body{
 button,input,select,textarea{font:inherit}
 
 .appLayout{
-  display:grid;
-  grid-template-columns:260px 1fr;
   min-height:100vh;
 }
 
@@ -39,7 +37,7 @@ button,input,select,textarea{font:inherit}
   left:0;
   width:260px;
   height:100vh;
-  background:linear-gradient(180deg, var(--sidebar), var(--sidebar-2));
+  background:linear-gradient(180deg,var(--sidebar),var(--sidebar-2));
   color:#fff;
   padding:22px 18px;
   display:flex;
@@ -85,6 +83,7 @@ button,input,select,textarea{font:inherit}
 }
 
 .sideLink{
+  width:100%;
   border:none;
   background:transparent;
   color:rgba(255,255,255,.84);
@@ -112,6 +111,7 @@ button,input,select,textarea{font:inherit}
 
 .hubBtn{
   display:block;
+  width:100%;
   text-decoration:none;
   background:#fff;
   color:var(--sidebar);
@@ -122,11 +122,9 @@ button,input,select,textarea{font:inherit}
 }
 
 .mainShell{
-  display:flex;
-  flex-direction:column;
-  min-width:0;
   margin-left:260px;
   min-height:100vh;
+  min-width:0;
 }
 
 .topbar{
@@ -160,27 +158,42 @@ button,input,select,textarea{font:inherit}
   display:flex;
   gap:10px;
   flex-wrap:wrap;
+  align-items:center;
 }
 
 .contentWrap{
-  padding:110px 26px 22px;
+  padding:110px 26px 26px;
+  width:100%;
+  min-width:0;
 }
 
-.view{display:none}
-.view.is-active{display:block}
+.view{
+  display:none;
+  width:100%;
+  min-width:0;
+}
+
+.view.is-active{
+  display:block;
+}
 
 .headerRow{
   display:flex;
   justify-content:space-between;
   align-items:flex-end;
   gap:14px;
-  margin:12px 0;
+  margin:12px 0 16px;
+  width:100%;
+}
+
+.titleBlock{
+  min-width:0;
 }
 
 .h1{
-  font-size:22px;
+  font-size:24px;
   font-weight:800;
-  letter-spacing:-.2px;
+  letter-spacing:-.3px;
 }
 
 .muted{
@@ -193,6 +206,7 @@ button,input,select,textarea{font:inherit}
   display:flex;
   gap:10px;
   flex-wrap:wrap;
+  align-items:center;
 }
 
 .subtab{
@@ -211,18 +225,22 @@ button,input,select,textarea{font:inherit}
 }
 
 .subtab.is-active{
-  background:linear-gradient(180deg, var(--primary), var(--primary-2));
+  background:linear-gradient(180deg,var(--primary),var(--primary-2));
   border-color:transparent;
   color:#fff;
 }
 
 .gridCards{
   display:grid;
-  grid-template-columns:repeat(3,1fr);
+  grid-template-columns:repeat(3,minmax(0,1fr));
   gap:14px;
+  width:100%;
+  min-width:0;
 }
 
 .card{
+  width:100%;
+  min-width:0;
   border:1px solid var(--line);
   background:#fff;
   border-radius:var(--radius);
@@ -257,22 +275,34 @@ button,input,select,textarea{font:inherit}
 .kpi-a{
   background:
     radial-gradient(700px 200px at 10% 0%, rgba(214,177,90,.18), transparent 60%),
-    linear-gradient(180deg, #171717, #0d0d0d);
+    linear-gradient(180deg,#171717,#0d0d0d);
 }
 
 .kpi-b{
   background:
     radial-gradient(700px 200px at 10% 0%, rgba(34,211,238,.16), transparent 60%),
-    linear-gradient(180deg, #171717, #0d0d0d);
+    linear-gradient(180deg,#171717,#0d0d0d);
 }
 
 .kpi-c{
   background:
     radial-gradient(700px 200px at 10% 0%, rgba(124,58,237,.18), transparent 60%),
-    linear-gradient(180deg, #171717, #0d0d0d);
+    linear-gradient(180deg,#171717,#0d0d0d);
+}
+
+.panel{
+  display:none;
+  width:100%;
+  min-width:0;
+}
+
+.panel.is-active{
+  display:block;
 }
 
 .section{
+  width:100%;
+  min-width:0;
   padding:18px;
   margin-top:14px;
 }
@@ -284,6 +314,7 @@ button,input,select,textarea{font:inherit}
   gap:12px;
   margin-bottom:12px;
   flex-wrap:wrap;
+  width:100%;
 }
 
 .sectionTitle{
@@ -307,6 +338,25 @@ button,input,select,textarea{font:inherit}
   display:flex;
   gap:10px;
   flex-wrap:wrap;
+  align-items:center;
+}
+
+.grid2{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:12px;
+  width:100%;
+}
+
+.grid4{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:12px;
+  width:100%;
+}
+
+.field{
+  min-width:0;
 }
 
 .field label{
@@ -319,6 +369,7 @@ button,input,select,textarea{font:inherit}
 
 .input{
   width:100%;
+  min-width:0;
   padding:11px 13px;
   border-radius:12px;
   border:1px solid #dfe3ec;
@@ -346,27 +397,19 @@ textarea.input{
   margin-top:8px;
 }
 
-.grid2{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:12px;
-}
-
-.grid4{
-  display:grid;
-  grid-template-columns:repeat(4,1fr);
-  gap:12px;
-}
-
 .table{
+  width:100%;
+  min-width:0;
   margin-top:10px;
 }
 
-.tHead,.tRow{
+.tHead,
+.tRow{
   display:grid;
-  grid-template-columns:1fr 90px 110px 110px 44px;
+  grid-template-columns:minmax(0,1fr) 90px 110px 110px 44px;
   gap:8px;
   align-items:start;
+  width:100%;
 }
 
 .tHead{
@@ -377,6 +420,11 @@ textarea.input{
   color:var(--muted);
   font-size:12px;
   font-weight:800;
+}
+
+.tHead > div,
+.tRow > div{
+  min-width:0;
 }
 
 .tRow{
@@ -400,6 +448,7 @@ textarea.input{
 }
 
 .totals{
+  width:100%;
   margin-top:14px;
   border-top:1px solid var(--line);
   padding-top:12px;
@@ -421,6 +470,8 @@ textarea.input{
 }
 
 .tableWrap{
+  width:100%;
+  min-width:0;
   overflow:auto;
   border:1px solid var(--line);
   border-radius:14px;
@@ -439,6 +490,7 @@ textarea.input{
   padding:12px 14px;
   text-align:left;
   border-bottom:1px solid var(--line);
+  vertical-align:middle;
 }
 
 .histTable th{
@@ -476,6 +528,7 @@ textarea.input{
   display:flex;
   gap:8px;
   flex-wrap:wrap;
+  align-items:center;
 }
 
 .aBtn{
@@ -493,15 +546,8 @@ textarea.input{
   background:#fafafa;
 }
 
-.panel{
-  display:none;
-}
-
-.panel.is-active{
-  display:block;
-}
-
 .previewBox{
+  width:100%;
   border:1px solid var(--line);
   border-radius:14px;
   overflow:hidden;
@@ -579,7 +625,7 @@ textarea.input{
 }
 
 .btn.primary{
-  background:linear-gradient(180deg, var(--primary), var(--primary-2));
+  background:linear-gradient(180deg,var(--primary),var(--primary-2));
   border-color:transparent;
   color:#fff;
 }
@@ -597,25 +643,32 @@ textarea.input{
   align-items:center;
 }
 
+#tplControls{
+  width:100%;
+}
+
+#tplControls .grid2{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:12px;
+}
+
 @media(max-width:1180px){
   .gridCards{
     grid-template-columns:1fr;
   }
+
+  .grid4{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
 }
 
 @media(max-width:980px){
-  .appLayout{
-    grid-template-columns:1fr;
-  }
-
   .sidebar{
     position:relative;
     width:100%;
     height:auto;
-    left:auto;
-    top:auto;
     overflow:visible;
-    padding:16px;
   }
 
   .mainShell{
@@ -632,16 +685,26 @@ textarea.input{
   }
 
   .contentWrap{
-    padding:22px 26px;
+    padding:22px 20px;
   }
 
   .grid2,
-  .grid4{
+  .grid4,
+  #tplControls .grid2{
     grid-template-columns:1fr;
   }
 
   .headerRow{
     flex-direction:column;
     align-items:flex-start;
+  }
+
+  .tHead,
+  .tRow{
+    grid-template-columns:minmax(0,1fr);
+  }
+
+  .del{
+    width:100%;
   }
 }
