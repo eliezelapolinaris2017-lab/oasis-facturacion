@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Nexus Invoicing</title>
+
+  <link rel="stylesheet" href="styles.css?v=20260114-2400" />
+
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+</head>
+<body>
+
+  <div class="appLayout">
+
+    <aside class="sidebar">
+      <div class="sidebarBrand">
+        <div class="sidebarLogo">N</div>
+        <div>
+          <div class="sidebarTitle">Nexus Invoicing</div>
+          <div class="sidebarSub">Oasis Suite · Operación 2026</div>
+        </div>
+      </div>
+
+      <nav class="sidebarNav tabs" id="mainTabs">
+        <button class="sideLink tab is-active" data-view="invoicing" type="button">Invoicing</button>
+        <button class="sideLink tab" data-view="customers" type="button">Customers</button>
+        <button class="sideLink tab" data-view="history" type="button">History</button>
+        <button class="sideLink tab" data-view="reporting" type="button">Reporting</button>
+        <button class="sideLink tab" data-view="configuration" type="button">Configuration</button>
+      </nav>
+
+      <div class="sidebarFooter">
+        <a class="hubBtn" id="hubBackBtn" href="#" title="Volver a Oasis Hub" aria-label="Volver a Oasis Hub">⟵ Hub</a>
+      </div>
+    </aside>
+
+    <section class="mainShell">
+
+      <header class="topbar">
+        <div>
+          <div class="pageTitle">Nexus Invoicing</div>
+          <div class="pageSub">Cotizaciones, facturas, clientes y configuración</div>
+        </div>
+
+        <div class="topActions">
+          <button class="btn ghost" id="btnSettings" type="button">Config</button>
+          <button class="btn primary" id="btnNew" type="button">New</button>
+        </div>
+      </header>
+
+      <main class="contentWrap">
+
+        <!-- INVOICING -->
+        <section class="view is-active" id="view-invoicing">
+          <div class="headerRow">
+            <div class="titleBlock">
+              <div class="h1">Invoices</div>
+              <div class="muted">Cotización + Factura con PDF, numeración e IVU.</div>
+            </div>
+
+            <div class="subtabs" id="invoiceSubtabs">
+              <button class="subtab is-active" data-sub="confirm" type="button">Editor</button>
+              <button class="subtab" data-sub="preview" type="button">Preview</button>
+            </div>
+          </div>
+
+          <section class="dashboardHero">
+            <article class="radialCard">
+              <div class="radialWrap">
+                <div class="radial ring-a">
+                  <div class="radialInner">
+                    <strong id="kpiDocs">0</strong>
+                    <span>Docs</span>
+                  </div>
+                </div>
+              </div>
+              <div class="radialMeta">
+                <div class="radialTitle">Documentos</div>
+                <div class="radialHint">Guardados en historial</div>
+              </div>
+            </article>
+
+            <article class="radialCard">
+              <div class="radialWrap">
+                <div class="radial ring-b">
+                  <div class="radialInner">
+                    <strong id="kpiTax">11.5%</strong>
+                    <span>IVU</span>
+                  </div>
+                </div>
+              </div>
+              <div class="radialMeta">
+                <div class="radialTitle">Tax Rate</div>
+                <div class="radialHint">Configuración activa</div>
+              </div>
+            </article>
+
+            <article class="valueCard">
+              <div class="valueEyebrow">Total actual</div>
+              <div class="valueBig" id="kpiLastTotal">$0.00</div>
+              <div class="valueHint">Documento en edición</div>
+            </article>
+          </section>
+
+          <section class="panel is-active" id="panel-confirm">
+            <section class="card section formShell">
+              <div class="sectionHead">
+                <div class="sectionTitle">Documento</div>
+                <div class="pill" id="docModePill">Nuevo</div>
+              </div>
+
+              <div class="grid4">
+                <div class="field">
+                  <label>Tipo</label>
+                  <select class="input" id="docType">
+                    <option value="COT">Cotización</option>
+                    <option value="FAC">Factura</option>
+                  </select>
+                </div>
+
+                <div class="field">
+                  <label>Número</label>
+                  <input class="input" id="docNumber" placeholder="AUTO" />
+                  <div class="hint">AUTO = genera número al Guardar/PDF.</div>
+                </div>
+
+                <div class="field">
+                  <label>Fecha</label>
+                  <input class="input" id="docDate" type="date" />
+                </div>
+
+                <div class="field">
+                  <label>Estado</label>
+                  <select class="input" id="docStatus">
+                    <option value="PENDIENTE">Pendiente</option>
+                    <option value="PAGADA">Pagada</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="grid2">
+                <div class="field">
+                  <label>Cliente</label>
+                  <input class="input" id="clientName" placeholder="Nombre del cliente" />
+                </div>
+                <div class="field">
+                  <label>Teléfono / Email</label>
+                  <input class="input" id="clientContact" placeholder="787-000-0000 / email" />
+                </div>
+                <div class="field">
+                  <label>Dirección</label>
+                  <input class="input" id="clientAddr" placeholder="Dirección del cliente" />
+                </div>
+                <div class="field">
+                  <label>Válida hasta</label>
+                  <input class="input" id="validUntil" type="date" />
+                </div>
+              </div>
+            </section>
+
+            <section class="card section formShell">
+              <div class="sectionHead">
+                <div class="sectionTitle">Items</div>
+                <div class="rowBtns">
+                  <button class="btn ghost" id="btnAddItem" type="button">+ Añadir</button>
+                  <button class="btn ghost" id="btnSaveDoc" type="button">Guardar</button>
+                  <button class="btn primary" id="btnPDF" type="button">Confirm (PDF)</button>
+                </div>
+              </div>
+
+              <div class="table">
+                <div class="tHead">
+                  <div>Descripción</div>
+                  <div>Cant.</div>
+                  <div>Precio</div>
+                  <div>Total</div>
+                  <div></div>
+                </div>
+                <div id="items"></div>
+              </div>
+
+              <div class="totals modernTotals">
+                <div class="totChip"><span>Subtotal</span><strong id="subTotal">$0.00</strong></div>
+                <div class="totChip"><span>IVU</span><strong id="taxTotal">$0.00</strong></div>
+                <div class="totChip grand"><span>Total</span><strong id="grandTotal">$0.00</strong></div>
+              </div>
+
+              <div class="grid2">
+                <div class="field">
+                  <label>Notas</label>
+                  <textarea class="input" id="notes" rows="4" placeholder="Notas / garantía / depósitos..."></textarea>
+                </div>
+                <div class="field">
+                  <label>Condiciones</label>
+                  <textarea class="input" id="terms" rows="4" placeholder="Términos y condiciones..."></textarea>
+                </div>
+              </div>
+
+              <div class="rowBtns" style="margin-top:12px">
+                <button class="btn ghost" id="btnDuplicate" type="button">Duplicar</button>
+                <button class="btn danger" id="btnDelete" type="button">Borrar</button>
+              </div>
+            </section>
+          </section>
+
+          <section class="panel" id="panel-preview">
+            <section class="card section">
+              <div class="sectionHead">
+                <div class="sectionTitle">Preview</div>
+                <div class="rowBtns">
+                  <button class="btn ghost" id="btnRefreshPreview" type="button">Refrescar</button>
+                  <button class="btn primary" id="btnConfirmFromPreview" type="button">Confirm (PDF)</button>
+                </div>
+              </div>
+
+              <div class="previewBox">
+                <iframe id="pdfFrame" title="PDF Preview"></iframe>
+              </div>
+
+              <div class="hint">Tip: logo ideal = PNG transparente.</div>
+            </section>
+          </section>
+        </section>
+
+        <!-- CUSTOMERS -->
+        <section class="view" id="view-customers">
+          <div class="headerRow">
+            <div class="titleBlock">
+              <div class="h1">Customers</div>
+              <div class="muted">Guarda clientes y úsalo para llenar cotización/factura en 1 click.</div>
+            </div>
+          </div>
+
+          <section class="dashboardHero dashboardHero-small">
+            <article class="radialCard">
+              <div class="radialWrap">
+                <div class="radial ring-c">
+                  <div class="radialInner">
+                    <strong id="kpiCustomers">0</strong>
+                    <span>Clientes</span>
+                  </div>
+                </div>
+              </div>
+              <div class="radialMeta">
+                <div class="radialTitle">Base activa</div>
+                <div class="radialHint">Clientes locales</div>
+              </div>
+            </article>
+
+            <article class="valueCard mini">
+              <div class="valueEyebrow">Acción</div>
+              <div class="valueBig">Rápida</div>
+              <div class="valueHint">Guardar / Usar</div>
+            </article>
+
+            <article class="valueCard mini">
+              <div class="valueEyebrow">Control</div>
+              <div class="valueBig">Nexus</div>
+              <div class="valueHint">Sin caos</div>
+            </article>
+          </section>
+
+          <section class="card section formShell">
+            <div class="sectionHead">
+              <div class="sectionTitle">Nuevo cliente</div>
+              <div class="rowBtns">
+                <button class="btn primary" id="btnAddCustomer" type="button">Guardar</button>
+              </div>
+            </div>
+
+            <div class="grid2">
+              <div class="field"><label>Nombre</label><input class="input" id="cName"></div>
+              <div class="field"><label>Tel/Email</label><input class="input" id="cContact"></div>
+              <div class="field"><label>Dirección</label><input class="input" id="cAddr"></div>
+              <div class="field"><label>Nota</label><input class="input" id="cNote"></div>
+            </div>
+          </section>
+
+          <section class="card section">
+            <div class="sectionHead">
+              <div class="sectionTitle">Lista</div>
+              <input class="input small" id="cSearch" placeholder="Buscar...">
+            </div>
+
+            <div class="tableWrap">
+              <table class="histTable">
+                <thead><tr><th>Nombre</th><th>Contacto</th><th>Dirección</th><th>Acciones</th></tr></thead>
+                <tbody id="customersBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <!-- HISTORY -->
+        <section class="view" id="view-history">
+          <div class="headerRow">
+            <div class="titleBlock">
+              <div class="h1">History</div>
+              <div class="muted">Todos los documentos en una sola bandeja.</div>
+            </div>
+          </div>
+
+          <section class="card section">
+            <div class="sectionHead">
+              <div class="sectionTitle">Historial</div>
+              <div class="histActions">
+                <input class="input small" id="histSearch" placeholder="Buscar: número o cliente" />
+                <button class="btn ghost" id="btnExportHist" type="button">Exportar</button>
+                <button class="btn ghost" id="btnClearHist" type="button">Vaciar</button>
+              </div>
+            </div>
+
+            <div class="tableWrap">
+              <table class="histTable">
+                <thead>
+                  <tr>
+                    <th>Tipo</th><th>No.</th><th>Fecha</th><th>Cliente</th><th>Estado</th><th>Total</th><th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="histBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <!-- REPORTING -->
+        <section class="view" id="view-reporting">
+          <div class="headerRow">
+            <div class="titleBlock">
+              <div class="h1">Reporting</div>
+              <div class="muted">Vista financiera rápida y limpia.</div>
+            </div>
+          </div>
+
+          <section class="dashboardHero">
+            <article class="radialCard">
+              <div class="radialWrap">
+                <div class="radial ring-a">
+                  <div class="radialInner">
+                    <strong id="repDocs">0</strong>
+                    <span>Docs</span>
+                  </div>
+                </div>
+              </div>
+              <div class="radialMeta">
+                <div class="radialTitle">Total de documentos</div>
+                <div class="radialHint">En historial</div>
+              </div>
+            </article>
+
+            <article class="valueCard">
+              <div class="valueEyebrow">Pendientes</div>
+              <div class="valueBig" id="repPending">$0.00</div>
+              <div class="valueHint">Pendiente por cobrar</div>
+            </article>
+
+            <article class="valueCard">
+              <div class="valueEyebrow">Pagadas</div>
+              <div class="valueBig" id="repPaid">$0.00</div>
+              <div class="valueHint">Cobrado acumulado</div>
+            </article>
+          </section>
+        </section>
+
+        <!-- CONFIGURATION -->
+        <section class="view" id="view-configuration">
+          <div class="headerRow">
+            <div class="titleBlock">
+              <div class="h1">Configuration</div>
+              <div class="muted">Empresa, logo, IVU y respaldo local.</div>
+            </div>
+          </div>
+
+          <section class="card section">
+            <div class="sectionHead">
+              <div class="sectionTitle">Abrir configuración</div>
+              <div class="rowBtns">
+                <button class="btn primary" id="btnOpenConfig" type="button">Abrir</button>
+              </div>
+            </div>
+            <div class="muted">Esto abre el panel de Empresa.</div>
+          </section>
+
+          <section class="card section">
+            <div class="sectionHead">
+              <div class="sectionTitle">Backup local</div>
+              <div class="rowBtns">
+                <button class="btn ghost" id="btnExportBackup" type="button">Export Backup</button>
+                <button class="btn primary" id="btnRestoreBackup" type="button">Restore</button>
+                <input id="restoreBackupFile" type="file" accept="application/json" hidden />
+              </div>
+            </div>
+            <div class="muted">Descarga un respaldo completo en JSON y restáuralo cuando quieras.</div>
+          </section>
+        </section>
+
+      </main>
+    </section>
+  </div>
+
+  <!-- SETTINGS MODAL -->
+  <div class="modal" id="settingsPanel" style="display:none">
+    <div class="modalCard">
+      <div class="modalHead">
+        <div>
+          <div class="modalTitle">Empresa</div>
+          <div class="modalHint">Esto controla el encabezado y el logo del PDF.</div>
+        </div>
+        <button class="btn ghost" id="btnCloseBiz" type="button">Cerrar</button>
+      </div>
+
+      <div class="modalBody">
+        <div class="grid2">
+          <div class="field">
+            <label>Nombre empresa</label>
+            <input class="input" id="bizName" placeholder="Oasis Air Cleaner Services LLC" />
+          </div>
+          <div class="field">
+            <label>Teléfono</label>
+            <input class="input" id="bizPhone" placeholder="787-664-3079" />
+          </div>
+          <div class="field">
+            <label>Email</label>
+            <input class="input" id="bizEmail" placeholder="correo@empresa.com" />
+          </div>
+          <div class="field">
+            <label>Dirección</label>
+            <input class="input" id="bizAddr" placeholder="Puerto Rico" />
+          </div>
+          <div class="field">
+            <label>Logo (PNG/JPG)</label>
+            <input class="input" id="bizLogo" type="file" accept="image/*" />
+            <div class="hint">PNG transparente recomendado.</div>
+          </div>
+          <div class="field">
+            <label>IVU %</label>
+            <input class="input" id="taxRate" type="number" step="0.01" placeholder="11.5" />
+          </div>
+        </div>
+
+        <div class="rowBtns" style="margin-top:14px">
+          <button class="btn primary" id="btnSaveBiz" type="button">Guardar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="app.js?v=20260114-2400"></script>
+</body>
+</html>
