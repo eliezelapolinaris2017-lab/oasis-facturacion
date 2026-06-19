@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Nexus Invoicing</title>
+  <title>Oasis Business Cloud Enterprise</title>
   <meta name="theme-color" content="#07070b" />
-  <link rel="stylesheet" href="styles.css?v=20260510-syncfix" />
+  <link rel="stylesheet" href="styles-mobile.css?v=20260619-enterprise-v21" />
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
 </head>
@@ -13,18 +13,23 @@
   <div class="appShell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="logoMark">N</div>
+        <div class="logoMark">O</div>
         <div>
-          <div class="brandTitle">Nexus Invoicing</div>
-          <div class="brandSub">Facturas · Cotizaciones</div>
+          <div class="brandTitle">Oasis Business Cloud</div>
+          <div class="brandSub">Enterprise ERP · Servicios</div>
         </div>
       </div>
       <nav class="nav">
-        <button class="navBtn is-active" data-view="dashboard" type="button">Dashboard</button>
-        <button class="navBtn" data-view="editor" type="button">Documento</button>
+        <button class="navBtn is-active" data-view="dashboard" type="button">📊 Dashboard</button>
+        <button class="navBtn" data-view="crm" type="button">👥 CRM</button>
+        <button class="navBtn" data-view="equipment" type="button">🔧 Equipos</button>
+        <button class="navBtn" data-view="services" type="button">📅 Servicios</button>
+        <button class="navBtn" data-view="editor" type="button">📋 Documento</button>
         <button class="navBtn" data-view="customers" type="button">Clientes</button>
         <button class="navBtn" data-view="history" type="button">Historial</button>
-        <button class="navBtn" data-view="settings" type="button">Config</button>
+        <button class="navBtn" data-view="inventory" type="button">📦 Inventario</button>
+        <button class="navBtn" data-view="reports" type="button">📈 Reportes</button>
+        <button class="navBtn" data-view="settings" type="button">⚙ Config</button>
       </nav>
       <div class="sideFoot">
         <span class="syncPill" id="authState">Offline</span>
@@ -35,24 +40,28 @@
     <section class="main">
       <header class="topbar">
         <div>
-          <div class="eyebrow">Nexus Tools PR</div>
+          <div class="eyebrow">Oasis Business Cloud · V2.1 Enterprise</div>
           <h1 id="pageTitle">Dashboard</h1>
         </div>
         <div class="topActions">
           <input class="input search" id="globalSearch" placeholder="Buscar..." />
           <button class="btn ghost" id="btnLogin" type="button">Login</button>
           <button class="btn ghost hidden" id="btnLogout" type="button">Logout</button>
-          <button class="btn primary" id="btnNewDoc" type="button">+ Documento</button>
+          <button class="btn primary" id="btnNewDoc" type="button">+ Cot / Fac</button>
         </div>
       </header>
 
       <main class="content">
         <section class="view is-active" id="view-dashboard">
-          <section class="metrics">
-            <article class="metric"><span>Clientes</span><strong id="kpiCustomers">0</strong></article>
-            <article class="metric"><span>Documentos</span><strong id="kpiDocs">0</strong></article>
-            <article class="metric"><span>Total</span><strong id="kpiRevenue">$0.00</strong></article>
-            <article class="metric"><span>Pendiente</span><strong id="kpiPending">$0.00</strong></article>
+          <section class="metrics enterpriseMetrics">
+            <article class="metric"><span>Ventas mes</span><strong id="kpiRevenue">$0.00</strong><small id="kpiToday">Hoy $0.00</small></article>
+            <article class="metric"><span>Por cobrar</span><strong id="kpiPending">$0.00</strong><small>Facturas y cotizaciones abiertas</small></article>
+            <article class="metric"><span>Clientes</span><strong id="kpiCustomers">0</strong><small>CRM + documentos</small></article>
+            <article class="metric"><span>Documentos</span><strong id="kpiDocs">0</strong><small id="kpiQuotesInvoices">0 COT · 0 FAC</small></article>
+            <article class="metric"><span>Equipos</span><strong id="kpiEquipment">0</strong><small>Activos registrados</small></article>
+            <article class="metric"><span>Garantías</span><strong id="kpiWarranty">0</strong><small>Activas</small></article>
+            <article class="metric"><span>Servicios</span><strong id="kpiServices">0</strong><small>Base preparada</small></article>
+            <article class="metric"><span>Alertas</span><strong id="kpiAlerts">0</strong><small>Mantenimiento / cobro</small></article>
           </section>
           <section class="split">
             <article class="card">
@@ -63,6 +72,71 @@
               <div class="cardHead"><h2>Clientes sincronizados</h2><button class="chip" id="btnImportCrm" type="button">Importar CRM</button></div>
               <div class="list" id="sharedList"></div>
             </article>
+          </section>
+        </section>
+
+        <section class="view" id="view-crm">
+          <section class="card heroCard">
+            <div>
+              <p class="eyebrow">CRM Premium</p>
+              <h2>Expediente digital del cliente</h2>
+              <p class="muted">Centraliza contacto, dirección, documentos, equipos, garantías, facturas y notas operacionales. Esto deja de ser una libreta bonita: ahora es inteligencia comercial.</p>
+            </div>
+            <button class="btn primary" id="btnCrmNewDoc" type="button">+ Documento al cliente</button>
+          </section>
+          <section class="card">
+            <div class="cardHead"><h2>CRM / Clientes</h2><button class="chip" id="btnExportCrm" type="button">CSV</button></div>
+            <div class="tableWrap"><table><thead><tr><th>Cliente</th><th>Contacto</th><th>Dirección</th><th>Documentos</th><th>Equipos</th><th>Valor</th><th></th></tr></thead><tbody id="crmBody"></tbody></table></div>
+          </section>
+        </section>
+
+        <section class="view" id="view-equipment">
+          <section class="card">
+            <div class="cardHead"><h2>Registro de Equipos</h2><span class="chip">Asset Management HVAC</span></div>
+            <div class="grid4">
+              <label>Cliente<select class="input" id="eqCustomer"></select></label>
+              <label>Propiedad / ubicación<input class="input" id="eqProperty" placeholder="Casa, oficina, sala, cuarto..." /></label>
+              <label>Tipo<select class="input" id="eqType"><option>Mini Split</option><option>Central</option><option>Piso techo</option><option>Wallpack</option><option>Chiller</option><option>Otro</option></select></label>
+              <label>Marca<input class="input" id="eqBrand" placeholder="AirMax, Gree, LG..." /></label>
+              <label>Modelo<input class="input" id="eqModel" placeholder="Modelo" /></label>
+              <label>Capacidad<input class="input" id="eqCapacity" placeholder="12k BTU / 3 TR" /></label>
+              <label>Refrigerante<select class="input" id="eqRefrigerant"><option>R32</option><option>R410A</option><option>R22</option><option>Otro</option></select></label>
+              <label>Voltaje<input class="input" id="eqVoltage" placeholder="110 / 220" /></label>
+              <label>Instalación<input class="input" id="eqInstallDate" type="date" /></label>
+              <label>Garantía hasta<input class="input" id="eqWarrantyUntil" type="date" /></label>
+              <label>Health Score<input class="input" id="eqHealth" type="number" min="0" max="100" value="100" /></label>
+              <button class="btn primary formBtn" id="btnSaveEquipment" type="button">Guardar equipo</button>
+            </div>
+          </section>
+          <section class="card">
+            <div class="cardHead"><h2>Equipos registrados</h2><button class="chip" id="btnExportEquipment" type="button">CSV</button></div>
+            <div class="tableWrap"><table><thead><tr><th>Cliente</th><th>Equipo</th><th>Propiedad</th><th>Garantía</th><th>Health</th><th></th></tr></thead><tbody id="equipmentBody"></tbody></table></div>
+          </section>
+        </section>
+
+        <section class="view" id="view-services">
+          <section class="card heroCard"><div><p class="eyebrow">Field Service</p><h2>Órdenes de servicio y agenda</h2><p class="muted">Base lista para asignar técnico, fotos, diagnóstico, firma, materiales y convertir servicio en factura. Sprint V2.2 montará el workflow completo.</p></div></section>
+          <section class="metrics">
+            <article class="metric"><span>Pendientes</span><strong>0</strong><small>Órdenes abiertas</small></article>
+            <article class="metric"><span>Completados</span><strong>0</strong><small>Hoy</small></article>
+            <article class="metric"><span>Técnicos</span><strong>0</strong><small>Próximo módulo</small></article>
+            <article class="metric"><span>Agenda</span><strong>Lista</strong><small>Preparada</small></article>
+          </section>
+        </section>
+
+        <section class="view" id="view-inventory">
+          <section class="card heroCard"><div><p class="eyebrow">Operaciones</p><h2>Inventario preparado</h2><p class="muted">Gas, capacitores, motores, compresores, filtros, herramientas, vehículos y alertas de bajo inventario. Esto entra en V2.3.</p></div></section>
+        </section>
+
+        <section class="view" id="view-reports">
+          <section class="card">
+            <div class="cardHead"><h2>Reportes Enterprise</h2><span class="chip">V2.1</span></div>
+            <div class="reportGrid">
+              <div class="listItem"><strong id="rRevenue">$0.00</strong><small>Ingresos registrados</small></div>
+              <div class="listItem"><strong id="rPending">$0.00</strong><small>Por cobrar</small></div>
+              <div class="listItem"><strong id="rCustomers">0</strong><small>Clientes únicos</small></div>
+              <div class="listItem"><strong id="rEquipment">0</strong><small>Equipos registrados</small></div>
+            </div>
           </section>
         </section>
 
@@ -157,6 +231,6 @@
       </main>
     </section>
   </div>
-  <script type="module" src="app.js?v=20260510-syncfix"></script>
+  <script type="module" src="app-mobile.js?v=20260619-enterprise-v21"></script>
 </body>
 </html>

@@ -26,6 +26,7 @@ const isIOS = () => /iPhone|iPad|iPod/i.test(navigator.userAgent || "");
 const base = (u) => `users/${u}`;
 const docsCol = (u) => collection(db, `${base(u)}/docs`);
 const customersCol = (u) => collection(db, `${base(u)}/customers`);
+const equipmentCol = (u) => collection(db, `${base(u)}/equipment`);
 const settingsRef = (u) => doc(db, `${base(u)}/settings/main`);
 const crmCol = (u) => collection(db, `${base(u)}/oasis_crm_v3/clients/items`);
 
@@ -36,6 +37,8 @@ let state = {
   current: null,
   docs: [],
   customers: [],
+  equipment: [],
+  services: [],
   cfg: null,
   loaded: false
 };
@@ -118,12 +121,14 @@ async function loadAll() {
     try { state.cfg.biz.logoDataUrl = await urlToDataUrl(state.cfg.biz.logoUrl); } catch {}
   }
 
-  const [ds, cs] = await Promise.all([
+  const [ds, cs, es] = await Promise.all([
     getDocs(query(docsCol(uidv), orderBy("updatedAt", "desc"))).catch(() => getDocs(docsCol(uidv))),
-    getDocs(query(customersCol(uidv), orderBy("updatedAt", "desc"))).catch(() => getDocs(customersCol(uidv)))
+    getDocs(query(customersCol(uidv), orderBy("updatedAt", "desc"))).catch(() => getDocs(customersCol(uidv))),
+    getDocs(query(equipmentCol(uidv), orderBy("updatedAt", "desc"))).catch(() => getDocs(equipmentCol(uidv))).catch(() => ({ docs: [] }))
   ]);
   state.docs = ds.docs.map(d => ({ id: d.id, ...d.data() }));
   state.customers = cs.docs.map(d => ({ id: d.id, ...d.data() }));
+  state.equipment = es.docs.map(d => ({ id: d.id, ...d.data() }));
   state.loaded = true;
   refreshAll();
   $("authState").textContent = "Online";
@@ -463,12 +468,28 @@ async function makePDF() {
 function badge(s) { return `<span class="badge ${s === "PAGADA" ? "ok" : s === "PENDIENTE" ? "warn" : ""}">${clean(s || "—")}</span>`; }
 function refreshKPIs() {
   const customers = mergedCustomers();
-  const revenue = state.docs.reduce((a, d) => a + Number(d.totals?.grand || 0), 0);
+  const monthKey = today().slice(0, 7);
+  const revenue = state.docs.filter(d => String(d.date || "").startsWith(monthKey)).reduce((a, d) => a + Number(d.totals?.grand || 0), 0);
+  const todayRevenue = state.docs.filter(d => d.date === today()).reduce((a, d) => a + Number(d.totals?.grand || 0), 0);
   const pending = state.docs.filter(d => d.status !== "PAGADA" && d.status !== "CANCELADA").reduce((a, d) => a + Number(d.totals?.grand || 0), 0);
-  $("kpiCustomers").textContent = customers.length;
-  $("kpiDocs").textContent = state.docs.length;
-  $("kpiRevenue").textContent = money(revenue);
-  $("kpiPending").textContent = money(pending);
+  const quotes = state.docs.filter(d => d.type === "COT").length;
+  const invoices = state.docs.filter(d => d.type === "FAC").length;
+  const warrantyActive = (state.equipment || []).filter(e => e.warrantyUntil && e.warrantyUntil >= today()).length;
+  const alerts = state.docs.filter(d => d.status !== "PAGADA" && d.status !== "CANCELADA").length + (state.equipment || []).filter(e => Number(e.health || 100) < 60).length;
+  if ($("kpiCustomers")) $("kpiCustomers").textContent = customers.length;
+  if ($("kpiDocs")) $("kpiDocs").textContent = state.docs.length;
+  if ($("kpiRevenue")) $("kpiRevenue").textContent = money(revenue);
+  if ($("kpiToday")) $("kpiToday").textContent = `Hoy ${money(todayRevenue)}`;
+  if ($("kpiPending")) $("kpiPending").textContent = money(pending);
+  if ($("kpiQuotesInvoices")) $("kpiQuotesInvoices").textContent = `${quotes} COT · ${invoices} FAC`;
+  if ($("kpiEquipment")) $("kpiEquipment").textContent = (state.equipment || []).length;
+  if ($("kpiWarranty")) $("kpiWarranty").textContent = warrantyActive;
+  if ($("kpiServices")) $("kpiServices").textContent = (state.services || []).length;
+  if ($("kpiAlerts")) $("kpiAlerts").textContent = alerts;
+  if ($("rRevenue")) $("rRevenue").textContent = money(revenue);
+  if ($("rPending")) $("rPending").textContent = money(pending);
+  if ($("rCustomers")) $("rCustomers").textContent = customers.length;
+  if ($("rEquipment")) $("rEquipment").textContent = (state.equipment || []).length;
 }
 function renderDashboard() {
   const body = $("recentBody"); body.innerHTML = "";
@@ -513,6 +534,74 @@ function renderHistory() {
   });
   if (!body.innerHTML) body.innerHTML = `<tr><td colspan="6" class="muted">Sin documentos.</td></tr>`;
 }
+function healthBadge(score) {
+  const n = Number(score || 0);
+  const cls = n >= 80 ? "ok" : n >= 60 ? "warn" : "bad";
+  const label = n >= 80 ? "Excelente" : n >= 60 ? "Atención" : "Crítico";
+  return `<span class="badge ${cls}">${n}% · ${label}</span>`;
+}
+function customerStats(name) {
+  const docs = state.docs.filter(d => norm(d.client?.name) === norm(name));
+  const total = docs.reduce((a, d) => a + Number(d.totals?.grand || 0), 0);
+  const eq = (state.equipment || []).filter(e => norm(e.customerName) === norm(name)).length;
+  return { docs: docs.length, total, eq };
+}
+function renderCRM() {
+  const body = $("crmBody"); if (!body) return;
+  body.innerHTML = "";
+  mergedCustomers().forEach(c => {
+    const st = customerStats(c.name);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><strong>${clean(c.name)}</strong><div class="muted">${clean(c.note || "Expediente activo")}</div></td><td>${clean(c.contact || "—")}</td><td>${clean(c.addr || "—")}</td><td>${st.docs}</td><td>${st.eq}</td><td><strong>${money(st.total)}</strong></td><td><button class="chip use" type="button">Documento</button></td>`;
+    tr.querySelector(".use").onclick = () => { state.current = newDoc(); state.current.client = { name: c.name, contact: c.contact || "", addr: c.addr || "" }; state.activeDocId = null; setView("editor"); syncForm(); };
+    body.appendChild(tr);
+  });
+  if (!body.innerHTML) body.innerHTML = `<tr><td colspan="7" class="muted">Sin clientes. Importa CRM o crea el primer cliente.</td></tr>`;
+}
+function renderEquipmentCustomerOptions() {
+  const sel = $("eqCustomer"); if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = `<option value="">Seleccionar cliente</option>` + mergedCustomers().map(c => `<option value="${clean(c.name)}">${clean(c.name)}</option>`).join("");
+  if (current) sel.value = current;
+}
+function renderEquipment() {
+  renderEquipmentCustomerOptions();
+  const body = $("equipmentBody"); if (!body) return;
+  body.innerHTML = "";
+  (state.equipment || []).forEach(e => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><strong>${clean(e.customerName || "—")}</strong></td><td>${clean([e.type, e.brand, e.capacity].filter(Boolean).join(" · ") || "Equipo") }<div class="muted">${clean(e.model || "")}</div></td><td>${clean(e.property || "—")}</td><td>${e.warrantyUntil && e.warrantyUntil >= today() ? badge("ACTIVA") : badge("VENCIDA")}</td><td>${healthBadge(e.health)}</td><td><button class="chip del" type="button">Borrar</button></td>`;
+    tr.querySelector(".del").onclick = async () => { if (!state.user) return; if (!confirm("¿Borrar equipo?")) return; await deleteDoc(doc(db, `${base(state.user.uid)}/equipment/${e.id}`)); await loadAll(); };
+    body.appendChild(tr);
+  });
+  if (!body.innerHTML) body.innerHTML = `<tr><td colspan="6" class="muted">Sin equipos registrados. Este módulo ya está listo para operar.</td></tr>`;
+}
+async function saveEquipment() {
+  if (!state.user) return alert("Login requerido.");
+  const payload = {
+    id: uid("eq"),
+    customerName: $("eqCustomer").value,
+    property: $("eqProperty").value.trim(),
+    type: $("eqType").value,
+    brand: $("eqBrand").value.trim(),
+    model: $("eqModel").value.trim(),
+    capacity: $("eqCapacity").value.trim(),
+    refrigerant: $("eqRefrigerant").value,
+    voltage: $("eqVoltage").value.trim(),
+    installDate: $("eqInstallDate").value,
+    warrantyUntil: $("eqWarrantyUntil").value,
+    health: Number($("eqHealth").value || 100),
+    createdAt: now(),
+    updatedAt: serverTimestamp(),
+    updatedISO: now()
+  };
+  if (!payload.customerName) return alert("Selecciona un cliente.");
+  await setDoc(doc(db, `${base(state.user.uid)}/equipment/${payload.id}`), payload, { merge: true });
+  ["eqProperty", "eqBrand", "eqModel", "eqCapacity", "eqVoltage", "eqInstallDate", "eqWarrantyUntil"].forEach(id => { if ($(id)) $(id).value = ""; });
+  if ($("eqHealth")) $("eqHealth").value = 100;
+  await loadAll();
+}
+
 function refreshSettingsUI() {
   if (!state.cfg) return;
   if ($("bizName")) $("bizName").value = state.cfg.biz?.name || "";
@@ -521,7 +610,7 @@ function refreshSettingsUI() {
   if ($("bizAddr")) $("bizAddr").value = state.cfg.biz?.addr || "";
   if ($("taxRate")) $("taxRate").value = state.cfg.taxRate ?? 0;
 }
-function refreshAll() { setAuthUI(); refreshKPIs(); renderDashboard(); renderCustomers(); renderHistory(); refreshSettingsUI(); renderDatalist(); }
+function refreshAll() { setAuthUI(); refreshKPIs(); renderDashboard(); renderCustomers(); renderHistory(); renderCRM(); renderEquipment(); refreshSettingsUI(); renderDatalist(); }
 async function addCustomer() {
   if (!state.user) return alert("Login requerido.");
   const c = { name: $("cName").value.trim(), contact: $("cContact").value.trim(), addr: $("cAddr").value.trim(), note: $("cNote").value.trim() };
@@ -558,7 +647,7 @@ function exportCSV(rows, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 500);
 }
 function backup() {
-  const payload = { version: "nexus_invoicing_sync_fix_v1", exportedAt: now(), docs: state.docs, customers: state.customers, cfg: state.cfg };
+  const payload = { version: "oasis_business_cloud_enterprise_v21", exportedAt: now(), docs: state.docs, customers: state.customers, equipment: state.equipment, cfg: state.cfg };
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
   a.download = `nexus_backup_${today()}.json`;
@@ -571,6 +660,7 @@ async function restore(file) {
   if (p.cfg) await setDoc(settingsRef(state.user.uid), p.cfg, { merge: true });
   for (const c of p.customers || []) await upsertCustomer(c, c.source || "backup");
   for (const d of p.docs || []) await setDoc(doc(db, `${base(state.user.uid)}/docs/${d.id || uid("doc")}`), d, { merge: true });
+  for (const e of p.equipment || []) await setDoc(doc(db, `${base(state.user.uid)}/equipment/${e.id || uid("eq")}`), e, { merge: true });
   await loadAll();
 }
 function setView(view) {
@@ -578,8 +668,8 @@ function setView(view) {
   document.querySelectorAll(".view").forEach(v => v.classList.remove("is-active"));
   $("view-" + view)?.classList.add("is-active");
   document.querySelectorAll(".navBtn").forEach(b => b.classList.toggle("is-active", b.dataset.view === view));
-  const names = { dashboard: "Dashboard", editor: "Documento", customers: "Clientes", history: "Historial", settings: "Config" };
-  $("pageTitle").textContent = names[view] || "Nexus Invoicing";
+  const names = { dashboard: "Dashboard Enterprise", crm: "CRM Premium", equipment: "Equipos", services: "Servicios", editor: "Documento", customers: "Clientes", history: "Historial", inventory: "Inventario", reports: "Reportes", settings: "Configuración" };
+  $("pageTitle").textContent = names[view] || "Oasis Business Cloud";
   refreshAll();
 }
 function bind() {
@@ -605,6 +695,10 @@ function bind() {
   $("btnBackup").onclick = backup;
   $("btnRestore").onclick = () => $("restoreFile").click();
   $("restoreFile").onchange = e => restore(e.target.files?.[0]);
+  if ($("btnCrmNewDoc")) $("btnCrmNewDoc").onclick = () => { state.current = newDoc(); state.activeDocId = null; setView("editor"); syncForm(); };
+  if ($("btnExportCrm")) $("btnExportCrm").onclick = () => exportCSV([["Cliente", "Contacto", "Dirección", "Documentos", "Equipos", "Valor"], ...mergedCustomers().map(c => { const st = customerStats(c.name); return [c.name, c.contact, c.addr, st.docs, st.eq, st.total]; })], `crm_${today()}.csv`);
+  if ($("btnSaveEquipment")) $("btnSaveEquipment").onclick = saveEquipment;
+  if ($("btnExportEquipment")) $("btnExportEquipment").onclick = () => exportCSV([["Cliente", "Propiedad", "Tipo", "Marca", "Modelo", "Capacidad", "Refrigerante", "Voltaje", "Garantía", "Health"], ...(state.equipment || []).map(e => [e.customerName, e.property, e.type, e.brand, e.model, e.capacity, e.refrigerant, e.voltage, e.warrantyUntil, e.health])], `equipos_${today()}.csv`);
 }
 async function boot() {
   bind();
@@ -617,7 +711,7 @@ async function boot() {
     state.user = u || null;
     setAuthUI();
     if (u) await loadAll();
-    else { state.docs = []; state.customers = []; refreshAll(); }
+    else { state.docs = []; state.customers = []; state.equipment = []; refreshAll(); }
   });
 }
 document.addEventListener("DOMContentLoaded", boot);

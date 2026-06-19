@@ -1,31 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-import {
-  getAuth,
-  GoogleAuthProvider,
-  signInWithPopup,
-  onAuthStateChanged,
-  signOut
-} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-import {
-  getFirestore,
-  doc,
-  setDoc,
-  getDoc,
-  collection,
-  getDocs,
-  query,
-  orderBy,
-  serverTimestamp,
-  deleteDoc
-} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-import {
-  getStorage,
-  ref,
-  uploadBytes,
-  getDownloadURL
-} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
-
-const HUB_URL = "https://eliezelapolinaris2017-lab.github.io/oasis-hub/";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import { getFirestore, doc, setDoc, getDoc, collection, getDocs, query, orderBy, serverTimestamp, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-storage.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBm67RjL0QzMRLfo6zUYCI0bak1eGJAR-U",
@@ -36,25 +12,38 @@ const firebaseConfig = {
   appId: "1:84422038905:web:b0eef65217d2bfc3298ba8"
 };
 
-const FB_APP = initializeApp(firebaseConfig);
-const auth = getAuth(FB_APP);
-const db = getFirestore(FB_APP);
-const storage = getStorage(FB_APP);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const storage = getStorage(app);
 
 const $ = (id) => document.getElementById(id);
+const money = (n) => Number(n || 0).toLocaleString("en-US", { style: "currency", currency: "USD" });
+const today = () => new Date().toISOString().slice(0, 10);
+const now = () => new Date().toISOString();
+const uid = (p = "id") => `${p}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+const isIOS = () => /iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+const base = (u) => `users/${u}`;
+const docsCol = (u) => collection(db, `${base(u)}/docs`);
+const customersCol = (u) => collection(db, `${base(u)}/customers`);
+const equipmentCol = (u) => collection(db, `${base(u)}/equipment`);
+const settingsRef = (u) => doc(db, `${base(u)}/settings/main`);
+const crmCol = (u) => collection(db, `${base(u)}/oasis_crm_v3/clients/items`);
 
-const fmtMoney = (n) => {
-  const x = Number(n || 0);
-  return x.toLocaleString("en-US", { style: "currency", currency: "USD" });
+let state = {
+  user: null,
+  view: "dashboard",
+  activeDocId: null,
+  current: null,
+  docs: [],
+  customers: [],
+  equipment: [],
+  services: [],
+  cfg: null,
+  loaded: false
 };
 
-const toISODate = (d) => new Date(d).toISOString().slice(0, 10);
-
-function uid(prefix = "id") {
-  return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-}
-
-function escapeHtml(s) {
+function clean(s) {
   return String(s || "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -62,22 +51,35 @@ function escapeHtml(s) {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 }
-
-async function blobToDataUrl(blob) {
-  return new Promise((res, rej) => {
-    const r = new FileReader();
-    r.onload = () => res(r.result);
-    r.onerror = rej;
-    r.readAsDataURL(blob);
-  });
+function norm(s) { return String(s || "").trim().toLowerCase(); }
+function defaultCfg() {
+  return {
+    biz: { name: "Oasis Air Cleaner Services LLC", phone: "787-664-3079", email: "", addr: "Puerto Rico", logoUrl: "", logoDataUrl: "" },
+    taxRate: 0
+  };
 }
-
-async function urlToDataUrl(url) {
-  const resp = await fetch(url, { cache: "no-store" });
-  const blob = await resp.blob();
-  return blobToDataUrl(blob);
+function normalizeCfg(c) {
+  const d = defaultCfg();
+  return { ...d, ...(c || {}), biz: { ...d.biz, ...(c?.biz || {}) }, taxRate: Number(c?.taxRate ?? 0) };
 }
-
+function newDoc(type = "COT") {
+  return {
+    id: uid("doc"),
+    type,
+    number: "",
+    date: today(),
+    validUntil: new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10),
+    status: type === "FAC" ? "PENDIENTE" : "PENDIENTE",
+    client: { name: "", contact: "", addr: "" },
+    items: [{ id: uid("it"), desc: "", qty: 1, price: 0 }],
+    notes: "",
+    terms: "",
+    totals: { sub: 0, tax: 0, grand: 0 },
+    taxRate: Number(state.cfg?.taxRate ?? 0),
+    createdAt: now(),
+    updatedAt: now()
+  };
+}
 async function fileToDataUrl(file) {
   return new Promise((res, rej) => {
     const r = new FileReader();
@@ -86,1360 +88,630 @@ async function fileToDataUrl(file) {
     r.readAsDataURL(file);
   });
 }
+async function urlToDataUrl(url) {
+  const resp = await fetch(url, { cache: "no-store" });
+  const blob = await resp.blob();
+  return fileToDataUrl(blob);
+}
+function setAuthUI() {
+  const on = !!state.user;
+  $("btnLogin")?.classList.toggle("hidden", on);
+  $("btnLogout")?.classList.toggle("hidden", !on);
+  $("authState").textContent = on ? "Online" : "Offline";
+  ["btnSaveDoc", "btnPDF", "btnDeleteDoc", "btnAddCustomer", "btnImportCrm", "btnImportCrm2", "btnSaveSettings", "btnBackup", "btnRestore"].forEach(id => {
+    if ($(id)) $(id).disabled = !on;
+  });
+}
+async function login() {
+  const provider = new GoogleAuthProvider();
+  if (isIOS()) return signInWithRedirect(auth, provider);
+  try { await signInWithPopup(auth, provider); }
+  catch (e) { await signInWithRedirect(auth, provider); }
+}
+async function logout() { await signOut(auth); }
 
-function userBase(uid_) { return `users/${uid_}`; }
-function colDocs(uid_) { return collection(db, `${userBase(uid_)}/docs`); }
-function colCustomers(uid_) { return collection(db, `${userBase(uid_)}/customers`); }
-function colCrmCustomers(uid_) { return collection(db, `${userBase(uid_)}/oasis_crm_v3/clients/items`); }
-function docSettings(uid_) { return doc(db, `${userBase(uid_)}/settings/main`); }
+async function loadAll() {
+  if (!state.user) return;
+  $("authState").textContent = "Sync...";
+  const uidv = state.user.uid;
 
-let state = {
-  user: null,
-  view: "invoicing",
-  sub: "confirm",
-  activeDocId: null,
-  current: null,
-  previewBlobUrl: null,
-  docs: [],
-  customers: [],
-  cfg: null,
-  catalogIndex: { catById: new Map(), svcById: new Map() }
-};
+  const s = await getDoc(settingsRef(uidv));
+  state.cfg = normalizeCfg(s.exists() ? s.data() : defaultCfg());
+  if (state.cfg.biz.logoUrl && !state.cfg.biz.logoDataUrl) {
+    try { state.cfg.biz.logoDataUrl = await urlToDataUrl(state.cfg.biz.logoUrl); } catch {}
+  }
 
-function customerKey(c) {
-  return String(`${c?.name || ""}|${c?.contact || c?.phone || c?.tel || ""}`)
-    .trim()
-    .toLowerCase();
+  const [ds, cs, es] = await Promise.all([
+    getDocs(query(docsCol(uidv), orderBy("updatedAt", "desc"))).catch(() => getDocs(docsCol(uidv))),
+    getDocs(query(customersCol(uidv), orderBy("updatedAt", "desc"))).catch(() => getDocs(customersCol(uidv))),
+    getDocs(query(equipmentCol(uidv), orderBy("updatedAt", "desc"))).catch(() => getDocs(equipmentCol(uidv))).catch(() => ({ docs: [] }))
+  ]);
+  state.docs = ds.docs.map(d => ({ id: d.id, ...d.data() }));
+  state.customers = cs.docs.map(d => ({ id: d.id, ...d.data() }));
+  state.equipment = es.docs.map(d => ({ id: d.id, ...d.data() }));
+  state.loaded = true;
+  refreshAll();
+  $("authState").textContent = "Online";
 }
 
-function normalizeCustomer(raw = {}, source = "clientes") {
-  return {
-    id: String(raw.id || uid("cus")),
-    name: String(raw.name || raw.nombre || "").trim(),
-    contact: String(raw.contact || raw.phone || raw.tel || raw.telefono || "").trim(),
-    addr: String(raw.addr || raw.address || raw.direccion || "").trim(),
-    note: String(raw.note || raw.nota || "").trim(),
-    source: raw.source || source,
-    createdAt: raw.createdAt || raw.createdISO || new Date().toISOString(),
-    updatedISO: raw.updatedISO || raw.updatedAt || new Date().toISOString()
-  };
-}
-
-function mergeCustomers(...groups) {
+function customerKey(c) { return norm(`${c.name}|${c.contact || ""}`); }
+function mergedCustomers() {
   const map = new Map();
-  groups.flat().forEach((raw) => {
-    const c = normalizeCustomer(raw, raw?.source || "clientes");
+  (state.customers || []).forEach(c => { if (c?.name) map.set(customerKey(c), { ...c, source: c.source || "clientes" }); });
+  (state.docs || []).forEach(d => {
+    const c = d.client || {};
     if (!c.name) return;
     const k = customerKey(c);
-    const prev = map.get(k);
-    if (!prev) map.set(k, c);
-    else map.set(k, { ...prev, ...c, source: prev.source === "clientes" ? prev.source : c.source });
+    if (!map.has(k)) map.set(k, { id: uid("auto"), name: c.name, contact: c.contact || "", addr: c.addr || "", source: "documentos" });
   });
   return [...map.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
 }
-
 async function upsertCustomer(raw, source = "manual") {
-  if (!state.user) return null;
-  const clean = normalizeCustomer(raw, source);
-  if (!clean.name) return null;
-
-  const existing = mergeCustomers(state.customers || []).find((c) => customerKey(c) === customerKey(clean));
-  const id = existing?.id && !String(existing.id).startsWith("crm_") ? existing.id : (clean.id || uid("cus"));
-
-  const payload = {
-    ...clean,
-    id,
-    source,
-    updatedAt: serverTimestamp(),
-    updatedISO: new Date().toISOString()
-  };
-
-  await setDoc(doc(db, `${userBase(state.user.uid)}/customers/${id}`), payload, { merge: true });
+  if (!state.user || !raw?.name) return null;
+  const name = String(raw.name || "").trim();
+  const contact = String(raw.contact || raw.phone || raw.tel || "").trim();
+  const addr = String(raw.addr || raw.address || "").trim();
+  const note = String(raw.note || "").trim();
+  const existing = mergedCustomers().find(c => norm(c.name) === norm(name) && norm(c.contact || "") === norm(contact));
+  const id = existing?.id && !String(existing.id).startsWith("auto_") ? existing.id : (raw.id || uid("cus"));
+  const payload = { id, name, contact, addr, note, source, updatedAt: serverTimestamp(), updatedISO: now() };
+  await setDoc(doc(db, `${base(state.user.uid)}/customers/${id}`), payload, { merge: true });
   return payload;
 }
-
-async function importCrmCustomers({ silent = false } = {}) {
+async function importCrmCustomers() {
   if (!state.user) return alert("Login requerido.");
+  $("authState").textContent = "Importando...";
   let snap;
-  try {
-    snap = await getDocs(colCrmCustomers(state.user.uid));
-  } catch (e) {
-    if (!silent) alert("No pude leer clientes del CRM.");
-    return 0;
-  }
-
+  try { snap = await getDocs(crmCol(state.user.uid)); }
+  catch (e) { alert("No pude leer clientes del CRM. Revisa reglas de Firestore."); $("authState").textContent = "Online"; return; }
   let count = 0;
   for (const d of snap.docs) {
-    const c = normalizeCustomer({ id: d.id, ...d.data() }, "CRM");
-    if (!c.name) continue;
-    await upsertCustomer(c, "CRM");
+    const c = d.data();
+    if (!c?.name) continue;
+    await upsertCustomer({ id: c.id || d.id, name: c.name, contact: c.contact || c.phone || "", addr: c.addr || c.address || "", note: c.note || "" }, "CRM");
     count++;
   }
-
-  await loadAllFromFirestore();
-  if (!silent) alert(`Clientes CRM importados: ${count}`);
-  return count;
+  await loadAll();
+  alert(`Clientes importados: ${count}`);
 }
 
-function ensureCrmImportButton() {
-  if ($("btnImportCrmMobile")) return;
-  const search = $("cSearch");
-  const parent = search?.parentElement;
-  if (!parent) return;
-
-  const row = document.createElement("div");
-  row.className = "rowBtns";
-  row.style.margin = "10px 0 12px";
-  row.innerHTML = `<button class="btn ghost flex1" id="btnImportCrmMobile" type="button">Importar CRM</button>`;
-  parent.insertBefore(row, search);
-
-  $("btnImportCrmMobile")?.addEventListener("click", () => importCrmCustomers());
+function readForm() {
+  if (!state.current) state.current = newDoc();
+  const c = state.current;
+  c.type = $("docType").value;
+  c.number = $("docNumber").value.trim();
+  c.date = $("docDate").value || today();
+  c.validUntil = c.validUntil || new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  c.status = $("docStatus").value;
+  c.client = { name: $("clientName").value.trim(), contact: $("clientContact").value.trim(), addr: $("clientAddr").value.trim() };
+  c.notes = $("notes").value.trim();
+  c.terms = $("terms").value.trim();
+  c.taxRate = Number(state.cfg?.taxRate ?? 0);
+  c.items = [...document.querySelectorAll(".itemRow")].map(row => ({
+    id: row.dataset.id || uid("it"),
+    desc: row.querySelector(".desc").value.trim(),
+    qty: Number(row.querySelector(".qty").value || 0),
+    price: Number(row.querySelector(".price").value || 0)
+  })).filter(it => it.desc || it.qty || it.price);
+  if (!c.items.length) c.items = [{ id: uid("it"), desc: "", qty: 1, price: 0 }];
+  calcTotals();
 }
-
-function defaultCatalog() {
-  return {
-    categories: [
-      {
-        id: "cat_mant",
-        name: "Mantenimiento",
-        services: [
-          {
-            id: "svc_mant_res",
-            name: "Mantenimiento Preventivo Mini Split",
-            desc: "Servicio preventivo: limpieza, revisión eléctrica, drenajes y prueba operacional.",
-            price: 55,
-            notes: "Incluye 1 unidad. Precio sujeto a acceso y condición.",
-            warranty: "Garantía de servicio: 30 días en mano de obra.",
-            terms: "Depósito no reembolsable si aplica y no hay acceso o respuesta."
-          }
-        ]
-      },
-      {
-        id: "cat_diag",
-        name: "Diagnóstico",
-        services: [
-          {
-            id: "svc_diag_bas",
-            name: "Diagnóstico Técnico",
-            desc: "Evaluación técnica y recomendación de reparación.",
-            price: 45,
-            notes: "Diagnóstico no incluye reparación ni piezas.",
-            warranty: "Garantía aplica solo a reparación realizada.",
-            terms: "El diagnóstico se acredita si se aprueba la reparación el mismo día."
-          }
-        ]
-      }
-    ]
-  };
-}
-
-function defaultTemplates() {
-  return {
-    notes: [
-      { id: "nt_std", name: "Nota estándar", text: "Gracias por preferirnos. Trabajo realizado según inspección en sitio." }
-    ],
-    warranties: [
-      { id: "w_30", name: "Garantía 30 días", text: "Garantía de 30 días en mano de obra. No cubre mal uso ni terceros." }
-    ],
-    terms: [
-      { id: "t_std", name: "Términos estándar", text: "Pago contra entrega. IVU aplicado según ley." }
-    ]
-  };
-}
-
-function defaultCfg() {
-  return {
-    biz: {
-      name: "Oasis Air Cleaner Services LLC",
-      phone: "787-664-3079",
-      email: "",
-      addr: "Puerto Rico",
-      logoUrl: "",
-      logoDataUrl: ""
-    },
-    taxRate: 11.5,
-    catalog: defaultCatalog(),
-    templates: defaultTemplates()
-  };
-}
-
-function normalizeCfg(cfg) {
-  const base = defaultCfg();
-  const merged = { ...base, ...(cfg || {}) };
-
-  merged.biz = { ...base.biz, ...(cfg?.biz || {}) };
-  merged.catalog = cfg?.catalog?.categories ? cfg.catalog : base.catalog;
-  merged.templates = cfg?.templates ? {
-    notes: Array.isArray(cfg.templates.notes) ? cfg.templates.notes : base.templates.notes,
-    warranties: Array.isArray(cfg.templates.warranties) ? cfg.templates.warranties : base.templates.warranties,
-    terms: Array.isArray(cfg.templates.terms) ? cfg.templates.terms : base.templates.terms
-  } : base.templates;
-
-  merged.catalog.categories = (merged.catalog.categories || []).map((c) => ({
-    id: String(c.id || uid("cat")),
-    name: String(c.name || "Categoría"),
-    services: (c.services || []).map((s) => ({
-      id: String(s.id || uid("svc")),
-      name: String(s.name || "Servicio"),
-      desc: String(s.desc || ""),
-      price: Number(s.price || 0),
-      notes: String(s.notes || ""),
-      warranty: String(s.warranty || ""),
-      terms: String(s.terms || "")
-    }))
-  }));
-
-  const fixTpl = (arr, fallback) =>
-    (Array.isArray(arr) ? arr : fallback).map((x) => ({
-      id: String(x.id || uid("tpl")),
-      name: String(x.name || "Plantilla"),
-      text: String(x.text || "")
-    }));
-
-  merged.templates.notes = fixTpl(merged.templates.notes, base.templates.notes);
-  merged.templates.warranties = fixTpl(merged.templates.warranties, base.templates.warranties);
-  merged.templates.terms = fixTpl(merged.templates.terms, base.templates.terms);
-
-  return merged;
-}
-
-function indexCatalog() {
-  state.catalogIndex.catById = new Map();
-  state.catalogIndex.svcById = new Map();
-
-  const cats = state.cfg?.catalog?.categories || [];
-  cats.forEach((c) => {
-    state.catalogIndex.catById.set(c.id, c);
-    (c.services || []).forEach((s) => state.catalogIndex.svcById.set(s.id, { ...s, _catId: c.id }));
-  });
-}
-
-function newDoc() {
-  const cfg = state.cfg || defaultCfg();
-  const today = toISODate(new Date());
-  const valid = toISODate(new Date(Date.now() + 14 * 24 * 3600 * 1000));
-
-  return {
-    id: uid("doc"),
-    type: "COT",
-    number: "",
-    date: today,
-    status: "PENDIENTE",
-    client: { name: "", contact: "", addr: "" },
-    validUntil: valid,
-    items: [{ id: uid("it"), desc: "", qty: 1, price: 0, catId: "", svcId: "" }],
-    notes: "",
-    terms: "",
-    totals: { sub: 0, tax: 0, grand: 0 },
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    taxRate: Number(cfg.taxRate || 11.5)
-  };
-}
-
-function ensureAuthButtons() {
-  const wrap = $("mobileTopActions") || document.querySelector(".mobileTopActions");
-  if (!wrap) return;
-
-  if (!$("btnLogin")) {
-    const b = document.createElement("button");
-    b.className = "iconBtn";
-    b.id = "btnLogin";
-    b.type = "button";
-    b.title = "Login";
-    b.textContent = "↗";
-    wrap.prepend(b);
-  }
-
-  if (!$("btnLogout")) {
-    const b = document.createElement("button");
-    b.className = "iconBtn";
-    b.id = "btnLogout";
-    b.type = "button";
-    b.title = "Logout";
-    b.textContent = "⎋";
-    wrap.prepend(b);
-  }
-
-  $("btnLogin").addEventListener("click", login);
-  $("btnLogout").addEventListener("click", logout);
-
-  refreshAuthUI();
-}
-
-function refreshAuthUI() {
-  const isOn = !!state.user;
-
-  if ($("btnLogin")) $("btnLogin").style.display = isOn ? "none" : "grid";
-  if ($("btnLogout")) $("btnLogout").style.display = isOn ? "grid" : "none";
-
-  [
-    "btnSaveDoc",
-    "btnPDF",
-    "btnConfirmFromPreview",
-    "btnExportHist",
-    "btnClearHist",
-    "btnAddCustomer",
-    "btnExportBackup",
-    "btnRestoreBackup",
-    "btnImportCrmMobile"
-  ].forEach((id) => {
-    if ($(id)) $(id).disabled = !isOn;
-  });
-}
-
-async function login() {
-  const provider = new GoogleAuthProvider();
-  await signInWithPopup(auth, provider);
-}
-
-async function logout() {
-  await signOut(auth);
-}
-
-async function loadAllFromFirestore() {
-  if (!state.user) return;
-
-  const sref = docSettings(state.user.uid);
-  const snap = await getDoc(sref);
-  state.cfg = snap.exists() ? normalizeCfg(snap.data()) : normalizeCfg(defaultCfg());
-
-  if (state.cfg?.biz?.logoUrl && !state.cfg.biz.logoDataUrl) {
-    try {
-      state.cfg.biz.logoDataUrl = await urlToDataUrl(state.cfg.biz.logoUrl);
-    } catch {}
-  }
-
-  indexCatalog();
-
-  const qDocs = query(colDocs(state.user.uid), orderBy("updatedAt", "desc"));
-  const docsSnap = await getDocs(qDocs).catch(() => getDocs(colDocs(state.user.uid)));
-  state.docs = docsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-
-  const qCus = query(colCustomers(state.user.uid), orderBy("createdAt", "desc"));
-  const cusSnap = await getDocs(qCus).catch(() => getDocs(colCustomers(state.user.uid)));
-  const localCustomers = cusSnap.docs.map((d) => ({ id: d.id, ...d.data(), source: "clientes" }));
-
-  let crmCustomers = [];
-  try {
-    const crmSnap = await getDocs(colCrmCustomers(state.user.uid));
-    crmCustomers = crmSnap.docs.map((d) => ({ id: `crm_${d.id}`, ...d.data(), source: "CRM" }));
-  } catch {}
-
-  const docCustomers = (state.docs || [])
-    .map((d) => ({ ...(d.client || {}), source: "documento" }))
-    .filter((c) => c.name);
-
-  state.customers = mergeCustomers(localCustomers, crmCustomers, docCustomers);
-
-  refreshKPIs();
-  renderHistory();
-  renderCustomers();
-  renderReporting();
-  syncFormFromState();
-}
-
-async function saveSettingsToFirestore() {
-  if (!state.user) return;
-  const sref = docSettings(state.user.uid);
-
-  const safeCfg = JSON.parse(JSON.stringify(normalizeCfg(state.cfg || defaultCfg())));
-  if (safeCfg?.biz) safeCfg.biz.logoDataUrl = "";
-
-  await setDoc(sref, { ...safeCfg, updatedAt: serverTimestamp() }, { merge: true });
-}
-
-async function buildBackupPayload() {
-  return {
-    exportedAt: new Date().toISOString(),
-    version: "nexus_invoicing_mobile_backup_local_v1",
-    docs: Array.isArray(state.docs) ? state.docs : [],
-    customers: Array.isArray(state.customers) ? state.customers : [],
-    cfg: state.cfg ? JSON.parse(JSON.stringify(state.cfg)) : defaultCfg()
-  };
-}
-
-async function exportBackupFile() {
-  const payload = await buildBackupPayload();
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `nexus_invoicing_mobile_backup_${toISODate(new Date())}.json`;
-  a.click();
-
-  setTimeout(() => URL.revokeObjectURL(url), 800);
-}
-
-async function restoreBackupFromFile(file) {
-  if (!state.user) return alert("Login requerido.");
-
-  const txt = await file.text();
-  const parsed = JSON.parse(txt);
-
-  if (!parsed || parsed.version !== "nexus_invoicing_mobile_backup_local_v1") {
-    throw new Error("Archivo de backup inválido.");
-  }
-
-  const docsArr = Array.isArray(parsed.docs) ? parsed.docs : [];
-  const customersArr = Array.isArray(parsed.customers) ? parsed.customers : [];
-  const cfgObj = normalizeCfg(parsed.cfg || defaultCfg());
-
-  state.cfg = cfgObj;
-  await saveSettingsToFirestore();
-
-  for (const c of customersArr) {
-    const cid = c.id || uid("cus");
-    await setDoc(doc(db, `${userBase(state.user.uid)}/customers/${cid}`), {
-      ...c,
-      restoredAt: serverTimestamp()
-    }, { merge: true });
-  }
-
-  for (const d of docsArr) {
-    const did = d.id || uid("doc");
-    await setDoc(doc(db, `${userBase(state.user.uid)}/docs/${did}`), {
-      ...d,
-      restoredAt: serverTimestamp()
-    }, { merge: true });
-  }
-
-  await loadAllFromFirestore();
-  alert("Backup restaurado ✅");
-}
-
-function setView(view) {
-  state.view = view;
-
-  document.querySelectorAll(".view").forEach((v) => v.classList.remove("is-active"));
-  $(`view-${view}`)?.classList.add("is-active");
-
-  document.querySelectorAll(".bottomLink").forEach((b) => b.classList.remove("is-active"));
-  document.querySelectorAll(`.bottomLink[data-view="${view}"]`).forEach((b) => b.classList.add("is-active"));
-
-  if (view === "invoicing") renderInvoicing();
-  if (view === "customers") renderCustomers();
-  if (view === "history") renderHistory();
-  if (view === "reporting") renderReporting();
-  if (view === "configuration") renderConfiguration();
-}
-
-function setSub(sub) {
-  state.sub = sub;
-
-  document.querySelectorAll(".subtab").forEach((b) => b.classList.remove("is-active"));
-  document.querySelectorAll(`.subtab[data-sub="${sub}"]`).forEach((b) => b.classList.add("is-active"));
-
-  document.querySelectorAll(".panel").forEach((p) => p.classList.remove("is-active"));
-  if (sub === "confirm") $("panel-confirm")?.classList.add("is-active");
-  if (sub === "preview") $("panel-preview")?.classList.add("is-active");
-
-  if (sub === "preview") makePreview();
-}
-
-function syncFormFromState() {
+function calcTotals() {
   if (!state.current) return;
-
-  if ($("docType")) $("docType").value = state.current.type;
-  if ($("docNumber")) $("docNumber").value = state.current.number || "";
-  if ($("docDate")) $("docDate").value = state.current.date || toISODate(new Date());
-  if ($("docStatus")) $("docStatus").value = state.current.status || "PENDIENTE";
-
-  if ($("clientName")) $("clientName").value = state.current.client?.name || "";
-  if ($("clientContact")) $("clientContact").value = state.current.client?.contact || "";
-  if ($("clientAddr")) $("clientAddr").value = state.current.client?.addr || "";
-  if ($("validUntil")) $("validUntil").value = state.current.validUntil || "";
-  if ($("notes")) $("notes").value = state.current.notes || "";
-  if ($("terms")) $("terms").value = state.current.terms || "";
-
-  if ($("docModePill")) $("docModePill").textContent = state.activeDocId ? "Editando" : "Nuevo";
+  const sub = (state.current.items || []).reduce((a, it) => a + Number(it.qty || 0) * Number(it.price || 0), 0);
+  const tax = sub * (Number(state.current.taxRate ?? state.cfg?.taxRate ?? 0) / 100);
+  state.current.totals = { sub, tax, grand: sub + tax };
+  $("subTotal").textContent = money(sub);
+  $("taxTotal").textContent = money(tax);
+  $("grandTotal").textContent = money(sub + tax);
 }
-
-function readDocHeaderIntoState() {
-  if (!state.current) return;
-
-  state.current.type = $("docType")?.value || "COT";
-  state.current.number = ($("docNumber")?.value || "").trim();
-  state.current.date = $("docDate")?.value || toISODate(new Date());
-  state.current.status = $("docStatus")?.value || "PENDIENTE";
-  state.current.client.name = ($("clientName")?.value || "").trim();
-  state.current.client.contact = ($("clientContact")?.value || "").trim();
-  state.current.client.addr = ($("clientAddr")?.value || "").trim();
-  state.current.validUntil = $("validUntil")?.value || "";
-  state.current.notes = ($("notes")?.value || "").trim();
-  state.current.terms = ($("terms")?.value || "").trim();
+function syncForm() {
+  const c = state.current || newDoc();
+  $("docType").value = c.type || "COT";
+  $("docNumber").value = c.number || "";
+  $("docDate").value = c.date || today();
+  $("docStatus").value = c.status || "PENDIENTE";
+  $("clientName").value = c.client?.name || "";
+  $("clientContact").value = c.client?.contact || "";
+  $("clientAddr").value = c.client?.addr || "";
+  $("notes").value = c.notes || "";
+  $("terms").value = c.terms || "";
+  $("docMode").textContent = state.activeDocId ? "Editando" : "Nuevo";
+  renderItems();
 }
-
-function buildServiceOptions(catId = "", selectedSvc = "") {
-  const cat = state.catalogIndex.catById.get(catId);
-  const list = cat?.services || [];
-
-  let html = `<option value="">Servicio</option>`;
-  list.forEach((svc) => {
-    html += `<option value="${escapeHtml(svc.id)}" ${svc.id === selectedSvc ? "selected" : ""}>${escapeHtml(svc.name)}</option>`;
+function renderItems() {
+  const box = $("items");
+  box.innerHTML = "";
+  (state.current?.items || []).forEach(it => {
+    const row = document.createElement("div");
+    row.className = "itemRow";
+    row.dataset.id = it.id || uid("it");
+    row.innerHTML = `<input class="input desc" placeholder="Descripción" value="${clean(it.desc)}"><input class="input qty" type="number" step="0.01" value="${Number(it.qty || 0)}"><input class="input price" type="number" step="0.01" value="${Number(it.price || 0)}"><div class="itemTotal">${money(Number(it.qty || 0) * Number(it.price || 0))}</div><button class="btn danger del" type="button">×</button>`;
+    row.querySelectorAll("input").forEach(i => i.addEventListener("input", () => { readForm(); renderItemTotalsOnly(); }));
+    row.querySelector(".del").addEventListener("click", () => { row.remove(); readForm(); renderItems(); });
+    box.appendChild(row);
   });
-  return html;
+  calcTotals();
 }
-
-function buildCategoryOptions(selectedCat = "") {
-  const cats = state.cfg?.catalog?.categories || [];
-  let html = `<option value="">Categoría</option>`;
-  cats.forEach((cat) => {
-    html += `<option value="${escapeHtml(cat.id)}" ${cat.id === selectedCat ? "selected" : ""}>${escapeHtml(cat.name)}</option>`;
-  });
-  return html;
-}
-
-function renderItemsMobile() {
-  const wrap = $("itemsMobile");
-  if (!wrap) return;
-
-  wrap.innerHTML = "";
-
-  const items = state.current?.items || [];
-  if (!items.length) {
-    wrap.innerHTML = `<div class="listCard"><div class="listTitle">Sin items</div><div class="listSub">Añade una línea para comenzar.</div></div>`;
-    return;
-  }
-
-  items.forEach((it) => {
-    const card = document.createElement("article");
-    card.className = "mobileItemCard";
-    card.dataset.itemId = it.id;
-
-    const total = Number(it.qty || 0) * Number(it.price || 0);
-
-    card.innerHTML = `
-      <div class="mobileItemGrid">
-        <div class="itemRow2">
-          <div class="field">
-            <label>Categoría</label>
-            <select class="input item-cat">${buildCategoryOptions(it.catId || "")}</select>
-          </div>
-          <div class="field">
-            <label>Servicio</label>
-            <select class="input item-svc">${buildServiceOptions(it.catId || "", it.svcId || "")}</select>
-          </div>
-        </div>
-
-        <div class="field">
-          <label>Descripción</label>
-          <input class="input item-desc" value="${escapeHtml(it.desc || "")}" placeholder="Descripción" />
-        </div>
-
-        <div class="itemRow2">
-          <div class="field">
-            <label>Cantidad</label>
-            <input class="input item-qty" type="number" min="0" step="1" value="${Number(it.qty ?? 1)}" />
-          </div>
-          <div class="field">
-            <label>Precio</label>
-            <input class="input item-price" type="number" min="0" step="0.01" value="${Number(it.price ?? 0)}" />
-          </div>
-        </div>
-
-        <div class="itemTotal">
-          <span>Total</span>
-          <strong>${fmtMoney(total)}</strong>
-        </div>
-
-        <button class="itemDelete" type="button">Eliminar item</button>
-      </div>
-    `;
-
-    const catSel = card.querySelector(".item-cat");
-    const svcSel = card.querySelector(".item-svc");
-    const descInput = card.querySelector(".item-desc");
-    const qtyInput = card.querySelector(".item-qty");
-    const priceInput = card.querySelector(".item-price");
-    const delBtn = card.querySelector(".itemDelete");
-
-    catSel.addEventListener("change", () => {
-      it.catId = catSel.value || "";
-      it.svcId = "";
-      svcSel.innerHTML = buildServiceOptions(it.catId, "");
-      updateTotalsLive();
-    });
-
-    svcSel.addEventListener("change", () => {
-      it.svcId = svcSel.value || "";
-      if (!it.svcId) return;
-
-      const svc = state.catalogIndex.svcById.get(it.svcId);
-      if (!svc) return;
-
-      it.desc = svc.desc || svc.name || "";
-      it.price = Number(svc.price || 0);
-      descInput.value = it.desc;
-      priceInput.value = String(it.price);
-
-      if ((!state.current.notes || !state.current.notes.trim()) && svc.notes) {
-        state.current.notes = svc.notes;
-        if ($("notes")) $("notes").value = svc.notes;
-      }
-
-      if ((!state.current.terms || !state.current.terms.trim()) && svc.terms) {
-        state.current.terms = svc.terms;
-        if ($("terms")) $("terms").value = svc.terms;
-      }
-
-      updateTotalsLive();
-      renderItemsMobile();
-    });
-
-    descInput.addEventListener("input", () => {
-      it.desc = descInput.value;
-    });
-
-    qtyInput.addEventListener("input", () => {
-      it.qty = Number(qtyInput.value || 0);
-      updateTotalsLive();
-      renderItemsMobile();
-    });
-
-    priceInput.addEventListener("input", () => {
-      it.price = Number(priceInput.value || 0);
-      updateTotalsLive();
-      renderItemsMobile();
-    });
-
-    delBtn.addEventListener("click", () => {
-      state.current.items = state.current.items.filter((x) => x.id !== it.id);
-      if (!state.current.items.length) {
-        state.current.items.push({ id: uid("it"), desc: "", qty: 1, price: 0, catId: "", svcId: "" });
-      }
-      updateTotalsLive();
-      renderItemsMobile();
-    });
-
-    wrap.appendChild(card);
+function renderItemTotalsOnly() {
+  document.querySelectorAll(".itemRow").forEach(row => {
+    const qty = Number(row.querySelector(".qty").value || 0);
+    const price = Number(row.querySelector(".price").value || 0);
+    row.querySelector(".itemTotal").textContent = money(qty * price);
   });
 }
-
-function updateTotalsLive() {
-  if (!state.current) return;
-
-  const cfg = state.cfg || defaultCfg();
-  const taxRate = Number(cfg.taxRate ?? state.current.taxRate ?? 11.5);
-  state.current.taxRate = taxRate;
-
-  let sub = 0;
-  (state.current.items || []).forEach((it) => {
-    sub += Number(it.qty || 0) * Number(it.price || 0);
-  });
-
-  const tax = sub * (taxRate / 100);
-  const grand = sub + tax;
-
-  state.current.totals = { sub, tax, grand };
-
-  if ($("subTotal")) $("subTotal").textContent = fmtMoney(sub);
-  if ($("taxTotal")) $("taxTotal").textContent = fmtMoney(tax);
-  if ($("grandTotal")) $("grandTotal").textContent = fmtMoney(grand);
-  if ($("kpiLastTotal")) $("kpiLastTotal").textContent = fmtMoney(grand);
-  if ($("kpiTax")) $("kpiTax").textContent = `${taxRate.toFixed(2)}%`;
-}
-
 function nextNumber(type) {
   const year = new Date().getFullYear();
-  const prefix = type === "FAC" ? "FAC" : "COT";
-  const re = new RegExp(`^${prefix}-${year}-(\\d{4})$`);
-  let max = 0;
-
-  (state.docs || []).forEach((d) => {
-    const m = (d.number || "").match(re);
-    if (m) max = Math.max(max, Number(m[1]));
-  });
-
-  return `${prefix}-${year}-${String(max + 1).padStart(4, "0")}`;
+  const prefix = `${type}-${year}-`;
+  const nums = state.docs.map(d => String(d.number || "")).filter(n => n.startsWith(prefix)).map(n => Number(n.split("-").pop())).filter(Boolean);
+  return `${prefix}${String((Math.max(0, ...nums) + 1)).padStart(4, "0")}`;
 }
-
-async function saveCurrentToHistory({ forceNumber = false } = {}) {
-  if (!state.user) return alert("Necesitas login para guardar.");
-
-  readDocHeaderIntoState();
-  updateTotalsLive();
-
-  if (forceNumber || !state.current.number) {
-    state.current.number = nextNumber(state.current.type);
-    if ($("docNumber")) $("docNumber").value = state.current.number;
-  }
-
-  const nowIso = new Date().toISOString();
-  state.current.updatedAt = nowIso;
-  if (!state.current.createdAt) state.current.createdAt = nowIso;
-
-  const refDoc = doc(db, `${userBase(state.user.uid)}/docs/${state.current.id}`);
-  const payload = JSON.parse(JSON.stringify(state.current));
-  payload.updatedAt = serverTimestamp();
-  if (!payload._createdAtServer) payload._createdAtServer = serverTimestamp();
-
-  await setDoc(refDoc, payload, { merge: true });
-  await upsertCustomer(state.current.client, "documento");
-  await loadAllFromFirestore();
-
-  state.activeDocId = state.current.id;
-}
-
-async function loadDocFromHistory(id) {
-  const d = (state.docs || []).find((x) => x.id === id);
-  if (!d) return;
-
-  state.activeDocId = d.id;
-  state.current = JSON.parse(JSON.stringify(d));
-  state.current.items = (state.current.items || []).map((it) => ({
-    id: it.id || uid("it"),
-    desc: it.desc || "",
-    qty: Number(it.qty || 0) || 1,
-    price: Number(it.price || 0),
-    catId: it.catId || "",
-    svcId: it.svcId || ""
-  }));
-
-  syncFormFromState();
-  updateTotalsLive();
-  renderItemsMobile();
-  setView("invoicing");
-  setSub("confirm");
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}
-
-async function deleteDocCloud() {
+async function saveDoc({ forceNumber = false } = {}) {
   if (!state.user) return alert("Login requerido.");
-  if (!state.activeDocId) return alert("No hay documento seleccionado.");
-  if (!confirm("¿Borrar este documento?")) return;
-
-  await deleteDoc(doc(db, `${userBase(state.user.uid)}/docs/${state.activeDocId}`));
+  readForm();
+  if (!state.current.client.name) return alert("Cliente requerido.");
+  if (forceNumber && !state.current.number) state.current.number = nextNumber(state.current.type);
+  state.current.id = state.activeDocId || state.current.id || uid("doc");
+  state.current.updatedAt = serverTimestamp();
+  state.current.updatedISO = now();
+  if (!state.current.createdAt) state.current.createdAt = now();
+  await setDoc(doc(db, `${base(state.user.uid)}/docs/${state.current.id}`), state.current, { merge: true });
+  await upsertCustomer(state.current.client, "documento");
+  state.activeDocId = state.current.id;
+  await loadAll();
+  syncForm();
+}
+async function loadDoc(id) {
+  const d = state.docs.find(x => x.id === id);
+  if (!d) return;
+  state.current = JSON.parse(JSON.stringify(d));
+  state.activeDocId = id;
+  setView("editor");
+  syncForm();
+}
+async function deleteCurrentDoc() {
+  if (!state.user || !state.activeDocId) return;
+  if (!confirm("¿Borrar documento?")) return;
+  await deleteDoc(doc(db, `${base(state.user.uid)}/docs/${state.activeDocId}`));
   state.activeDocId = null;
   state.current = newDoc();
-
-  syncFormFromState();
-  updateTotalsLive();
-  renderItemsMobile();
-  await loadAllFromFirestore();
+  await loadAll();
+  syncForm();
 }
-
 function duplicateDoc() {
-  readDocHeaderIntoState();
-
-  const copy = JSON.parse(JSON.stringify(state.current));
-  copy.id = uid("doc");
-  copy.number = "";
-  copy.status = "PENDIENTE";
-  copy.createdAt = new Date().toISOString();
-  copy.updatedAt = new Date().toISOString();
-  copy.items = (copy.items || []).map((it) => ({
-    ...it,
-    id: uid("it"),
-    catId: it.catId || "",
-    svcId: it.svcId || ""
-  }));
-
+  readForm();
+  state.current = { ...JSON.parse(JSON.stringify(state.current)), id: uid("doc"), number: "", status: "PENDIENTE", date: today(), createdAt: now(), updatedAt: now() };
   state.activeDocId = null;
-  state.current = copy;
-
-  syncFormFromState();
-  updateTotalsLive();
-  renderItemsMobile();
+  syncForm();
 }
+async function makePDF() {
+  await saveDoc({ forceNumber: true });
+  readForm();
 
-function renderHistory() {
-  const body = $("historyCards");
-  if (!body) return;
-
-  const q = (($("histSearch")?.value || "").trim().toLowerCase());
-  body.innerHTML = "";
-
-  let rows = [...(state.docs || [])];
-  if (q) {
-    rows = rows.filter((d) => {
-      const s = `${d.number || ""} ${d.client?.name || ""}`.toLowerCase();
-      return s.includes(q);
-    });
-  }
-
-  if (!rows.length) {
-    body.innerHTML = `<div class="listCard"><div class="listTitle">Sin historial</div><div class="listSub">Todavía no hay documentos guardados.</div></div>`;
-    return;
-  }
-
-  rows.forEach((d) => {
-    const card = document.createElement("article");
-    card.className = "listCard";
-    card.innerHTML = `
-      <div class="listCardTop">
-        <div>
-          <div class="listTitle">${escapeHtml(d.number || "AUTO")}</div>
-          <div class="listSub">${escapeHtml(d.client?.name || "Sin cliente")}</div>
-        </div>
-        <span class="badge ${d.status === "PAGADA" ? "ok" : "warn"}">${escapeHtml(d.status || "PENDIENTE")}</span>
-      </div>
-
-      <div class="listMeta">
-        <div class="metaBlock">
-          <div class="metaLabel">Tipo</div>
-          <div class="metaValue">${d.type === "FAC" ? "Factura" : "Cotización"}</div>
-        </div>
-        <div class="metaBlock">
-          <div class="metaLabel">Fecha</div>
-          <div class="metaValue">${escapeHtml(d.date || "—")}</div>
-        </div>
-        <div class="metaBlock">
-          <div class="metaLabel">Total</div>
-          <div class="metaValue">${fmtMoney(d.totals?.grand || 0)}</div>
-        </div>
-        <div class="metaBlock">
-          <div class="metaLabel">Cliente</div>
-          <div class="metaValue">${escapeHtml(d.client?.contact || "—")}</div>
-        </div>
-      </div>
-
-      <div class="cardActions">
-        <button class="btn smallBtn hist-open">Abrir</button>
-        <button class="btn smallBtn primary hist-pdf">PDF</button>
-      </div>
-    `;
-
-    card.querySelector(".hist-open").addEventListener("click", () => loadDocFromHistory(d.id));
-    card.querySelector(".hist-pdf").addEventListener("click", async () => {
-      await loadDocFromHistory(d.id);
-      await confirmPDF();
-    });
-
-    body.appendChild(card);
-  });
-
-  refreshKPIs();
-}
-
-function refreshKPIs() {
-  if ($("kpiDocs")) $("kpiDocs").textContent = String((state.docs || []).length);
-  if ($("kpiCustomers")) $("kpiCustomers").textContent = String((state.customers || []).length);
-  ensureCrmImportButton();
-
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF({ unit: "pt", format: "letter" });
   const cfg = state.cfg || defaultCfg();
-  if ($("kpiTax")) $("kpiTax").textContent = `${Number(cfg.taxRate || 11.5).toFixed(2)}%`;
-  if ($("kpiLastTotal")) $("kpiLastTotal").textContent = fmtMoney(state.current?.totals?.grand || 0);
-}
+  const doc = state.current || newDoc();
+  const docTitle = doc.type === "FAC" ? "FACTURA" : "COTIZACIÓN";
+  const docNumber = doc.number || nextNumber(doc.type || "COT");
+  const taxRate = Number(doc.taxRate ?? cfg.taxRate ?? 0);
+  const validUntil = doc.validUntil || new Date(Date.now() + 14 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 
-function renderReporting() {
-  const docs = state.docs || [];
-  let pending = 0;
-  let paid = 0;
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
+  const marginX = 46;
+  const safeText = (value) => String(value || "");
+  const line = (y) => {
+    pdf.setDrawColor(225, 225, 225);
+    pdf.setLineWidth(0.8);
+    pdf.line(marginX, y, pageW - marginX, y);
+  };
+  const writeWrapped = (text, x, y, width, lineHeight = 12) => {
+    const lines = pdf.splitTextToSize(safeText(text), width);
+    pdf.text(lines, x, y);
+    return y + lines.length * lineHeight;
+  };
+  const labelMoney = (label, value, y, bold = false) => {
+    pdf.setFont("helvetica", bold ? "bold" : "normal");
+    pdf.setFontSize(bold ? 11 : 10);
+    pdf.text(label, totalsX + 14, y);
+    pdf.text(money(value), totalsX + totalsW - 14, y, { align: "right" });
+  };
 
-  docs.forEach((d) => {
-    const val = Number(d.totals?.grand || 0);
-    if (d.status === "PAGADA") paid += val;
-    else pending += val;
+  pdf.setTextColor(20, 20, 20);
+
+  // Header exacto estilo anterior moderno
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(22);
+  pdf.text(docTitle, marginX, 64);
+
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(10);
+  pdf.text(`No.: ${docNumber}`, marginX, 88);
+  pdf.text(`Fecha: ${safeText(doc.date || today())}`, marginX, 104);
+
+  const bizRight = pageW - marginX;
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(12);
+  pdf.text(safeText(cfg.biz?.name || "Oasis Air Cleaner Services LLC"), bizRight, 64, { align: "right" });
+
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(10);
+  let by = 80;
+  const bizLines = [];
+  if (cfg.biz?.addr) bizLines.push(cfg.biz.addr);
+  if (cfg.biz?.phone) bizLines.push(`Tel: ${cfg.biz.phone}`);
+  if (cfg.biz?.email) bizLines.push(`Email: ${cfg.biz.email}`);
+  bizLines.forEach((txt) => {
+    pdf.text(safeText(txt), bizRight, by, { align: "right" });
+    by += 14;
   });
 
-  if ($("repPending")) $("repPending").textContent = fmtMoney(pending);
-  if ($("repPaid")) $("repPaid").textContent = fmtMoney(paid);
-  if ($("repDocs")) $("repDocs").textContent = String(docs.length);
+  line(116);
+
+  // Bloque cliente / válida hasta
+  const boxY = 140;
+  const boxH = 76;
+  pdf.setFillColor(248, 248, 248);
+  pdf.setDrawColor(225, 225, 225);
+  pdf.roundedRect(marginX, boxY, pageW - marginX * 2, boxH, 10, 10, "FD");
+
+  pdf.setFont("helvetica", "bold");
+  pdf.setFontSize(10);
+  pdf.text("Cliente", marginX + 14, boxY + 24);
+  pdf.text("Válida hasta", pageW - 205, boxY + 24);
+
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(10);
+  let cy = boxY + 40;
+  if (doc.client?.name) cy = writeWrapped(doc.client.name, marginX + 14, cy, 335, 12);
+  if (doc.client?.contact) cy = writeWrapped(doc.client.contact, marginX + 14, cy, 335, 12);
+  if (doc.client?.addr) writeWrapped(doc.client.addr, marginX + 14, cy, 335, 12);
+  pdf.text(safeText(validUntil), pageW - 205, boxY + 40);
+
+  // Tabla
+  const rows = (doc.items || [])
+    .filter((it) => it.desc || Number(it.qty || 0) || Number(it.price || 0))
+    .map((it) => [
+      safeText(it.desc),
+      String(Number(it.qty || 0)).replace(/\.00$/, ""),
+      money(it.price),
+      money(Number(it.qty || 0) * Number(it.price || 0))
+    ]);
+
+  pdf.autoTable({
+    startY: boxY + boxH + 22,
+    head: [["Descripción", "Cant.", "Precio", "Total"]],
+    body: rows,
+    theme: "grid",
+    margin: { left: marginX, right: marginX },
+    styles: {
+      font: "helvetica",
+      fontSize: 10,
+      cellPadding: { top: 8, right: 8, bottom: 8, left: 8 },
+      textColor: [70, 70, 70],
+      lineColor: [235, 235, 235],
+      lineWidth: 0.3,
+      fillColor: [255, 255, 255]
+    },
+    headStyles: {
+      fontStyle: "bold",
+      fillColor: [18, 18, 18],
+      textColor: [255, 255, 255],
+      lineColor: [18, 18, 18],
+      lineWidth: 0.4
+    },
+    columnStyles: {
+      0: { cellWidth: 286 },
+      1: { cellWidth: 70, halign: "right" },
+      2: { cellWidth: 92, halign: "right" },
+      3: { cellWidth: 92, halign: "right" }
+    }
+  });
+
+  let y = pdf.lastAutoTable.finalY + 28;
+  const sub = Number(doc.totals?.sub || 0);
+  const tax = Number(doc.totals?.tax || 0);
+  const grand = Number(doc.totals?.grand || 0);
+
+  // Totales en caja gris como formato anterior
+  var totalsW = 226;
+  var totalsX = pageW - marginX - totalsW;
+  const totalsH = 74;
+  pdf.setFillColor(248, 248, 248);
+  pdf.setDrawColor(225, 225, 225);
+  pdf.roundedRect(totalsX, y - 8, totalsW, totalsH, 10, 10, "FD");
+  labelMoney("Subtotal:", sub, y + 14);
+  labelMoney(`IVU (${taxRate.toFixed(2)}%):`, tax, y + 32);
+  labelMoney("TOTAL:", grand, y + 54, true);
+
+  y += totalsH + 28;
+
+  const ensureRoom = (needed = 80) => {
+    if (y + needed > pageH - 75) {
+      pdf.addPage();
+      y = 54;
+    }
+  };
+
+  if (doc.notes) {
+    ensureRoom(90);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(10);
+    pdf.setTextColor(30, 30, 30);
+    pdf.text("Notas", marginX, y);
+    y += 14;
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(10);
+    y = writeWrapped(doc.notes, marginX, y, pageW - marginX * 2, 12) + 36;
+  }
+
+  if (doc.terms) {
+    ensureRoom(90);
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(10);
+    pdf.text("Condiciones", marginX, y);
+    y += 14;
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(10);
+    y = writeWrapped(doc.terms, marginX, y, pageW - marginX * 2, 12) + 14;
+  }
+
+  pdf.setFont("helvetica", "normal");
+  pdf.setFontSize(9);
+  pdf.setTextColor(150, 150, 150);
+  pdf.text(`${safeText(cfg.biz?.name || "Oasis Air Cleaner Services LLC")} · ${docTitle} ${docNumber}`, marginX, pageH - 32);
+
+  pdf.save(`${doc.type || "DOC"}_${docNumber}.pdf`);
 }
 
+function badge(s) { return `<span class="badge ${s === "PAGADA" ? "ok" : s === "PENDIENTE" ? "warn" : ""}">${clean(s || "—")}</span>`; }
+function refreshKPIs() {
+  const customers = mergedCustomers();
+  const monthKey = today().slice(0, 7);
+  const revenue = state.docs.filter(d => String(d.date || "").startsWith(monthKey)).reduce((a, d) => a + Number(d.totals?.grand || 0), 0);
+  const todayRevenue = state.docs.filter(d => d.date === today()).reduce((a, d) => a + Number(d.totals?.grand || 0), 0);
+  const pending = state.docs.filter(d => d.status !== "PAGADA" && d.status !== "CANCELADA").reduce((a, d) => a + Number(d.totals?.grand || 0), 0);
+  const quotes = state.docs.filter(d => d.type === "COT").length;
+  const invoices = state.docs.filter(d => d.type === "FAC").length;
+  const warrantyActive = (state.equipment || []).filter(e => e.warrantyUntil && e.warrantyUntil >= today()).length;
+  const alerts = state.docs.filter(d => d.status !== "PAGADA" && d.status !== "CANCELADA").length + (state.equipment || []).filter(e => Number(e.health || 100) < 60).length;
+  if ($("kpiCustomers")) $("kpiCustomers").textContent = customers.length;
+  if ($("kpiDocs")) $("kpiDocs").textContent = state.docs.length;
+  if ($("kpiRevenue")) $("kpiRevenue").textContent = money(revenue);
+  if ($("kpiToday")) $("kpiToday").textContent = `Hoy ${money(todayRevenue)}`;
+  if ($("kpiPending")) $("kpiPending").textContent = money(pending);
+  if ($("kpiQuotesInvoices")) $("kpiQuotesInvoices").textContent = `${quotes} COT · ${invoices} FAC`;
+  if ($("kpiEquipment")) $("kpiEquipment").textContent = (state.equipment || []).length;
+  if ($("kpiWarranty")) $("kpiWarranty").textContent = warrantyActive;
+  if ($("kpiServices")) $("kpiServices").textContent = (state.services || []).length;
+  if ($("kpiAlerts")) $("kpiAlerts").textContent = alerts;
+  if ($("rRevenue")) $("rRevenue").textContent = money(revenue);
+  if ($("rPending")) $("rPending").textContent = money(pending);
+  if ($("rCustomers")) $("rCustomers").textContent = customers.length;
+  if ($("rEquipment")) $("rEquipment").textContent = (state.equipment || []).length;
+}
+function renderDashboard() {
+  const body = $("recentBody"); body.innerHTML = "";
+  state.docs.slice(0, 8).forEach(d => body.innerHTML += `<tr><td>${clean(d.date)}</td><td>${clean(d.client?.name)}</td><td>${clean(d.number || d.type)}</td><td><strong>${money(d.totals?.grand)}</strong></td><td>${badge(d.status)}</td></tr>`);
+  if (!body.innerHTML) body.innerHTML = `<tr><td colspan="5" class="muted">Sin documentos. Haz login y presiona Sync.</td></tr>`;
+  const list = $("sharedList"); list.innerHTML = "";
+  mergedCustomers().slice(0, 10).forEach(c => list.innerHTML += `<div class="listItem"><strong>${clean(c.name)}</strong><small>${clean(c.contact || c.addr || "")} · ${clean(c.source || "cliente")}</small></div>`);
+  if (!list.innerHTML) list.innerHTML = `<div class="listItem"><strong>Sin clientes</strong><small>Importa desde CRM o guarda un documento.</small></div>`;
+}
+function renderDatalist() {
+  const dl = $("customerNames"); if (!dl) return;
+  dl.innerHTML = mergedCustomers().map(c => `<option value="${clean(c.name)}"></option>`).join("");
+}
+function useCustomerByName() {
+  const name = $("clientName").value;
+  const c = mergedCustomers().find(x => norm(x.name) === norm(name));
+  if (!c) return;
+  if (!$("clientContact").value) $("clientContact").value = c.contact || "";
+  if (!$("clientAddr").value) $("clientAddr").value = c.addr || "";
+}
 function renderCustomers() {
-  const wrap = $("customersBody") || $("customerCards");
-  if (!wrap) return;
-
-  if ($("kpiCustomers")) $("kpiCustomers").textContent = String((state.customers || []).length);
-
-  const q = (($("cSearch")?.value || "").trim().toLowerCase());
-  let rows = [...(state.customers || [])];
-
-  if (q) {
-    rows = rows.filter((c) => {
-      const s = `${c.name || ""} ${c.contact || ""} ${c.addr || ""} ${c.source || ""}`.toLowerCase();
-      return s.includes(q);
-    });
-  }
-
-  wrap.innerHTML = "";
-
-  if (!rows.length) {
-    wrap.innerHTML = `<div class="listCard"><div class="listTitle">Sin clientes</div><div class="listSub">No hay registros todavía.</div></div>`;
-    return;
-  }
-
-  rows.forEach((c) => {
-    const card = document.createElement("article");
-    card.className = "listCard";
-    card.innerHTML = `
-      <div class="listCardTop">
-        <div>
-          <div class="listTitle">${escapeHtml(c.name || "")}</div>
-          <div class="listSub">${escapeHtml(c.contact || "")} ${c.source ? "· " + escapeHtml(c.source) : ""}</div>
-        </div>
-      </div>
-
-      <div class="listMeta">
-        <div class="metaBlock">
-          <div class="metaLabel">Dirección</div>
-          <div class="metaValue">${escapeHtml(c.addr || "—")}</div>
-        </div>
-        <div class="metaBlock">
-          <div class="metaLabel">Nota</div>
-          <div class="metaValue">${escapeHtml(c.note || "—")}</div>
-        </div>
-      </div>
-
-      <div class="cardActions">
-        <button class="btn smallBtn use-customer">Usar</button>
-        <button class="btn smallBtn danger del-customer">Borrar</button>
-      </div>
-    `;
-
-    card.querySelector(".use-customer").addEventListener("click", () => {
-      state.current.client.name = c.name || "";
-      state.current.client.contact = c.contact || "";
-      state.current.client.addr = c.addr || "";
-      syncFormFromState();
-      setView("invoicing");
-      setSub("confirm");
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    });
-
-    card.querySelector(".del-customer").addEventListener("click", async () => {
-      if (!state.user) return alert("Login requerido.");
-      if (!confirm("¿Borrar cliente?")) return;
-      if (String(c.id || "").startsWith("crm_")) {
-        alert("Este cliente viene del CRM. Para quitarlo, bórralo en el CRM o impórtalo y edítalo desde clientes.");
-        return;
-      }
-      await deleteDoc(doc(db, `${userBase(state.user.uid)}/customers/${c.id}`));
-      await loadAllFromFirestore();
-    });
-
-    wrap.appendChild(card);
+  const q = norm($("customerSearch")?.value || $("globalSearch")?.value || "");
+  const body = $("customersBody"); body.innerHTML = "";
+  mergedCustomers().filter(c => !q || [c.name, c.contact, c.addr, c.note, c.source].join(" ").toLowerCase().includes(q)).forEach(c => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><strong>${clean(c.name)}</strong><div class="muted">${clean(c.note || "")}</div></td><td>${clean(c.contact || "—")}</td><td>${clean(c.addr || "—")}</td><td>${clean(c.source || "—")}</td><td><button class="chip use" type="button">Usar</button> <button class="chip del" type="button">Borrar</button></td>`;
+    tr.querySelector(".use").onclick = () => { state.current = state.current || newDoc(); state.current.client = { name: c.name, contact: c.contact || "", addr: c.addr || "" }; setView("editor"); syncForm(); };
+    tr.querySelector(".del").onclick = async () => { if (!state.user || !c.id || String(c.id).startsWith("auto_")) return; if (!confirm("¿Borrar cliente?")) return; await deleteDoc(doc(db, `${base(state.user.uid)}/customers/${c.id}`)); await loadAll(); };
+    body.appendChild(tr);
   });
+  if (!body.innerHTML) body.innerHTML = `<tr><td colspan="5" class="muted">Sin clientes.</td></tr>`;
+  renderDatalist();
+}
+function renderHistory() {
+  const q = norm($("globalSearch")?.value || "");
+  const body = $("historyBody"); body.innerHTML = "";
+  state.docs.filter(d => !q || [d.number, d.client?.name, d.client?.contact, d.status].join(" ").toLowerCase().includes(q)).forEach(d => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${clean(d.date)}</td><td>${clean(d.number || "—")}</td><td>${clean(d.client?.name || "—")}</td><td><strong>${money(d.totals?.grand)}</strong></td><td>${badge(d.status)}</td><td><button class="chip open" type="button">Abrir</button></td>`;
+    tr.querySelector(".open").onclick = () => loadDoc(d.id);
+    body.appendChild(tr);
+  });
+  if (!body.innerHTML) body.innerHTML = `<tr><td colspan="6" class="muted">Sin documentos.</td></tr>`;
+}
+function healthBadge(score) {
+  const n = Number(score || 0);
+  const cls = n >= 80 ? "ok" : n >= 60 ? "warn" : "bad";
+  const label = n >= 80 ? "Excelente" : n >= 60 ? "Atención" : "Crítico";
+  return `<span class="badge ${cls}">${n}% · ${label}</span>`;
+}
+function customerStats(name) {
+  const docs = state.docs.filter(d => norm(d.client?.name) === norm(name));
+  const total = docs.reduce((a, d) => a + Number(d.totals?.grand || 0), 0);
+  const eq = (state.equipment || []).filter(e => norm(e.customerName) === norm(name)).length;
+  return { docs: docs.length, total, eq };
+}
+function renderCRM() {
+  const body = $("crmBody"); if (!body) return;
+  body.innerHTML = "";
+  mergedCustomers().forEach(c => {
+    const st = customerStats(c.name);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><strong>${clean(c.name)}</strong><div class="muted">${clean(c.note || "Expediente activo")}</div></td><td>${clean(c.contact || "—")}</td><td>${clean(c.addr || "—")}</td><td>${st.docs}</td><td>${st.eq}</td><td><strong>${money(st.total)}</strong></td><td><button class="chip use" type="button">Documento</button></td>`;
+    tr.querySelector(".use").onclick = () => { state.current = newDoc(); state.current.client = { name: c.name, contact: c.contact || "", addr: c.addr || "" }; state.activeDocId = null; setView("editor"); syncForm(); };
+    body.appendChild(tr);
+  });
+  if (!body.innerHTML) body.innerHTML = `<tr><td colspan="7" class="muted">Sin clientes. Importa CRM o crea el primer cliente.</td></tr>`;
+}
+function renderEquipmentCustomerOptions() {
+  const sel = $("eqCustomer"); if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = `<option value="">Seleccionar cliente</option>` + mergedCustomers().map(c => `<option value="${clean(c.name)}">${clean(c.name)}</option>`).join("");
+  if (current) sel.value = current;
+}
+function renderEquipment() {
+  renderEquipmentCustomerOptions();
+  const body = $("equipmentBody"); if (!body) return;
+  body.innerHTML = "";
+  (state.equipment || []).forEach(e => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><strong>${clean(e.customerName || "—")}</strong></td><td>${clean([e.type, e.brand, e.capacity].filter(Boolean).join(" · ") || "Equipo") }<div class="muted">${clean(e.model || "")}</div></td><td>${clean(e.property || "—")}</td><td>${e.warrantyUntil && e.warrantyUntil >= today() ? badge("ACTIVA") : badge("VENCIDA")}</td><td>${healthBadge(e.health)}</td><td><button class="chip del" type="button">Borrar</button></td>`;
+    tr.querySelector(".del").onclick = async () => { if (!state.user) return; if (!confirm("¿Borrar equipo?")) return; await deleteDoc(doc(db, `${base(state.user.uid)}/equipment/${e.id}`)); await loadAll(); };
+    body.appendChild(tr);
+  });
+  if (!body.innerHTML) body.innerHTML = `<tr><td colspan="6" class="muted">Sin equipos registrados. Este módulo ya está listo para operar.</td></tr>`;
+}
+async function saveEquipment() {
+  if (!state.user) return alert("Login requerido.");
+  const payload = {
+    id: uid("eq"),
+    customerName: $("eqCustomer").value,
+    property: $("eqProperty").value.trim(),
+    type: $("eqType").value,
+    brand: $("eqBrand").value.trim(),
+    model: $("eqModel").value.trim(),
+    capacity: $("eqCapacity").value.trim(),
+    refrigerant: $("eqRefrigerant").value,
+    voltage: $("eqVoltage").value.trim(),
+    installDate: $("eqInstallDate").value,
+    warrantyUntil: $("eqWarrantyUntil").value,
+    health: Number($("eqHealth").value || 100),
+    createdAt: now(),
+    updatedAt: serverTimestamp(),
+    updatedISO: now()
+  };
+  if (!payload.customerName) return alert("Selecciona un cliente.");
+  await setDoc(doc(db, `${base(state.user.uid)}/equipment/${payload.id}`), payload, { merge: true });
+  ["eqProperty", "eqBrand", "eqModel", "eqCapacity", "eqVoltage", "eqInstallDate", "eqWarrantyUntil"].forEach(id => { if ($(id)) $(id).value = ""; });
+  if ($("eqHealth")) $("eqHealth").value = 100;
+  await loadAll();
 }
 
+function refreshSettingsUI() {
+  if (!state.cfg) return;
+  if ($("bizName")) $("bizName").value = state.cfg.biz?.name || "";
+  if ($("bizPhone")) $("bizPhone").value = state.cfg.biz?.phone || "";
+  if ($("bizEmail")) $("bizEmail").value = state.cfg.biz?.email || "";
+  if ($("bizAddr")) $("bizAddr").value = state.cfg.biz?.addr || "";
+  if ($("taxRate")) $("taxRate").value = state.cfg.taxRate ?? 0;
+}
+function refreshAll() { setAuthUI(); refreshKPIs(); renderDashboard(); renderCustomers(); renderHistory(); renderCRM(); renderEquipment(); refreshSettingsUI(); renderDatalist(); }
 async function addCustomer() {
   if (!state.user) return alert("Login requerido.");
-
-  const name = ($("cName")?.value || "").trim();
-  if (!name) return alert("Nombre requerido.");
-
-  await upsertCustomer({
-    name,
-    contact: ($("cContact")?.value || "").trim(),
-    addr: ($("cAddr")?.value || "").trim(),
-    note: ($("cNote")?.value || "").trim()
-  }, "manual");
-
-  if ($("cName")) $("cName").value = "";
-  if ($("cContact")) $("cContact").value = "";
-  if ($("cAddr")) $("cAddr").value = "";
-  if ($("cNote")) $("cNote").value = "";
-
-  await loadAllFromFirestore();
+  const c = { name: $("cName").value.trim(), contact: $("cContact").value.trim(), addr: $("cAddr").value.trim(), note: $("cNote").value.trim() };
+  if (!c.name) return alert("Nombre requerido.");
+  await upsertCustomer(c, "manual");
+  ["cName", "cContact", "cAddr", "cNote"].forEach(id => $(id).value = "");
+  await loadAll();
 }
-
-function openBiz() {
-  const cfg = state.cfg || defaultCfg();
-  if ($("bizName")) $("bizName").value = cfg.biz?.name || "";
-  if ($("bizPhone")) $("bizPhone").value = cfg.biz?.phone || "";
-  if ($("bizEmail")) $("bizEmail").value = cfg.biz?.email || "";
-  if ($("bizAddr")) $("bizAddr").value = cfg.biz?.addr || "";
-  if ($("taxRate")) $("taxRate").value = String(cfg.taxRate ?? 11.5);
-  if ($("settingsPanel")) $("settingsPanel").style.display = "flex";
-}
-
-function closeBiz() {
-  if ($("settingsPanel")) $("settingsPanel").style.display = "none";
-}
-
-async function saveBiz() {
+async function saveSettings() {
   if (!state.user) return alert("Login requerido.");
-
   const cfg = state.cfg || defaultCfg();
-  cfg.biz = cfg.biz || {};
-
-  cfg.biz.name = ($("bizName")?.value || "").trim();
-  cfg.biz.phone = ($("bizPhone")?.value || "").trim();
-  cfg.biz.email = ($("bizEmail")?.value || "").trim();
-  cfg.biz.addr = ($("bizAddr")?.value || "").trim();
-  cfg.taxRate = Number($("taxRate")?.value || 11.5);
-
-  const file = $("bizLogo")?.files?.[0];
+  cfg.biz = { name: $("bizName").value.trim(), phone: $("bizPhone").value.trim(), email: $("bizEmail").value.trim(), addr: $("bizAddr").value.trim(), logoUrl: cfg.biz?.logoUrl || "", logoDataUrl: cfg.biz?.logoDataUrl || "" };
+  cfg.taxRate = $("taxRate").value === "" ? 0 : Number($("taxRate").value || 0);
+  const file = $("bizLogo").files?.[0];
   if (file) {
-    const path = `users/${state.user.uid}/logo_${Date.now()}_${file.name}`;
-    const r = ref(storage, path);
+    const r = ref(storage, `users/${state.user.uid}/logos/nexus_${Date.now()}_${file.name}`);
     await uploadBytes(r, file);
-    const url = await getDownloadURL(r);
-    cfg.biz.logoUrl = url;
-
-    try {
-      cfg.biz.logoDataUrl = await fileToDataUrl(file);
-    } catch {}
+    cfg.biz.logoUrl = await getDownloadURL(r);
+    cfg.biz.logoDataUrl = await fileToDataUrl(file);
   }
-
-  state.cfg = normalizeCfg(cfg);
-  await saveSettingsToFirestore();
-  indexCatalog();
-  refreshKPIs();
-  updateTotalsLive();
-  alert("Empresa guardada ✅");
-  closeBiz();
+  const safe = JSON.parse(JSON.stringify(cfg));
+  if (safe.biz) safe.biz.logoDataUrl = "";
+  await setDoc(settingsRef(state.user.uid), { ...safe, updatedAt: serverTimestamp() }, { merge: true });
+  state.cfg = cfg;
+  alert("Guardado.");
+  refreshAll();
 }
-
-function renderConfiguration() {
-  // intencionalmente liviano
+function exportCSV(rows, name) {
+  const csv = rows.map(r => r.map(x => `"${String(x ?? "").replaceAll('"', '""')}"`).join(",")).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 500);
 }
-
-function renderInvoicing() {
-  if (!state.current) state.current = newDoc();
-  syncFormFromState();
-  renderItemsMobile();
-  updateTotalsLive();
-  refreshKPIs();
+function backup() {
+  const payload = { version: "oasis_business_cloud_enterprise_v21", exportedAt: now(), docs: state.docs, customers: state.customers, equipment: state.equipment, cfg: state.cfg };
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+  a.download = `nexus_backup_${today()}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 500);
 }
-
-function buildPdfDoc() {
-  const { jsPDF } = window.jspdf;
-  const cfg = state.cfg || defaultCfg();
-  const biz = cfg.biz || {};
-  const taxRate = Number(cfg.taxRate || 11.5);
-
-  readDocHeaderIntoState();
-  updateTotalsLive();
-
-  const docp = new jsPDF({ unit: "pt", format: "a4" });
-  const W = docp.internal.pageSize.getWidth();
-  const H = docp.internal.pageSize.getHeight();
-  const margin = 42;
-
-  docp.setDrawColor(220);
-  docp.setLineWidth(1);
-  docp.line(margin, 110, W - margin, 110);
-
-  docp.setFont("helvetica", "bold");
-  docp.setFontSize(20);
-  docp.text(state.current.type === "FAC" ? "FACTURA" : "COTIZACIÓN", margin, 64);
-
-  docp.setFont("helvetica", "normal");
-  docp.setFontSize(10);
-  docp.text(`No.: ${state.current.number || "AUTO"}`, margin, 86);
-  docp.text(`Fecha: ${state.current.date || ""}`, margin, 102);
-
-  const rightX = W - margin;
-  let textTopY = 52;
-
-  if (biz.logoDataUrl) {
-    try {
-      const imgW = 54;
-      const imgH = 54;
-      const imgX = W - margin - imgW;
-      const imgY = 24;
-      const isPng = String(biz.logoDataUrl).startsWith("data:image/png");
-      docp.addImage(biz.logoDataUrl, isPng ? "PNG" : "JPEG", imgX, imgY, imgW, imgH);
-      textTopY = imgY + imgH + 10;
-    } catch {}
-  }
-
-  let topY = textTopY;
-  docp.setFont("helvetica", "bold");
-  docp.setFontSize(12);
-  docp.text(biz.name || "Empresa", rightX, topY, { align: "right" });
-
-  docp.setFont("helvetica", "normal");
-  docp.setFontSize(10);
-  topY += 14;
-  if (biz.addr) { docp.text(biz.addr, rightX, topY, { align: "right" }); topY += 12; }
-  if (biz.phone) { docp.text(`Tel: ${biz.phone}`, rightX, topY, { align: "right" }); topY += 12; }
-  if (biz.email) { docp.text(`Email: ${biz.email}`, rightX, topY, { align: "right" }); topY += 12; }
-
-  const boxY = 132;
-  docp.setFillColor(245, 245, 245);
-  docp.setDrawColor(230);
-  docp.roundedRect(margin, boxY, W - 2 * margin, 74, 10, 10, "FD");
-
-  docp.setTextColor(20);
-  docp.setFont("helvetica", "bold");
-  docp.setFontSize(10);
-  docp.text("Cliente", margin + 14, boxY + 22);
-
-  docp.setFont("helvetica", "normal");
-  docp.text(state.current.client.name || "—", margin + 14, boxY + 38);
-  docp.text(state.current.client.contact || "—", margin + 14, boxY + 52);
-  docp.text(state.current.client.addr || "—", margin + 14, boxY + 66);
-
-  docp.setFont("helvetica", "bold");
-  docp.text("Válida hasta", W - margin - 160, boxY + 22);
-  docp.setFont("helvetica", "normal");
-  docp.text(state.current.validUntil || "—", W - margin - 160, boxY + 40);
-
-  const items = (state.current.items || []).map((it) => {
-    const qty = Number(it.qty || 0);
-    const price = Number(it.price || 0);
-    return [it.desc || "", String(qty), fmtMoney(price), fmtMoney(qty * price)];
-  });
-
-  docp.autoTable({
-    startY: boxY + 92,
-    head: [["Descripción", "Cant.", "Precio", "Total"]],
-    body: items,
-    styles: { font: "helvetica", fontSize: 10, cellPadding: 8 },
-    headStyles: { fillColor: [20, 20, 20], textColor: [255, 255, 255] },
-    columnStyles: {
-      0: { cellWidth: 280 },
-      1: { halign: "right", cellWidth: 70 },
-      2: { halign: "right", cellWidth: 90 },
-      3: { halign: "right", cellWidth: 90 }
-    },
-    margin: { left: margin, right: margin }
-  });
-
-  const afterTableY = docp.lastAutoTable.finalY + 14;
-  const totW = 220;
-  const totX = W - margin - totW;
-  const totY = afterTableY;
-
-  docp.setFillColor(245, 245, 245);
-  docp.setDrawColor(230);
-  docp.roundedRect(totX, totY, totW, 74, 10, 10, "FD");
-
-  docp.setFont("helvetica", "normal");
-  docp.setFontSize(10);
-  docp.text("Subtotal:", totX + 12, totY + 22);
-  docp.text(fmtMoney(state.current.totals.sub), totX + totW - 12, totY + 22, { align: "right" });
-
-  docp.text(`IVU (${taxRate.toFixed(2)}%):`, totX + 12, totY + 40);
-  docp.text(fmtMoney(state.current.totals.tax), totX + totW - 12, totY + 40, { align: "right" });
-
-  docp.setFont("helvetica", "bold");
-  docp.text("TOTAL:", totX + 12, totY + 60);
-  docp.text(fmtMoney(state.current.totals.grand), totX + totW - 12, totY + 60, { align: "right" });
-
-  let textY = totY + 98;
-  docp.setFont("helvetica", "bold");
-  docp.text("Notas", margin, textY);
-  docp.setFont("helvetica", "normal");
-  docp.text((state.current.notes || "—").slice(0, 650), margin, textY + 14, { maxWidth: W - 2 * margin });
-
-  textY += 70;
-  docp.setFont("helvetica", "bold");
-  docp.text("Condiciones", margin, textY);
-  docp.setFont("helvetica", "normal");
-  docp.text((state.current.terms || "—").slice(0, 650), margin, textY + 14, { maxWidth: W - 2 * margin });
-
-  docp.setFontSize(9);
-  docp.setTextColor(120);
-  docp.text(
-    `${biz.name || "Empresa"} · ${state.current.type === "FAC" ? "FACTURA" : "COTIZACIÓN"} ${state.current.number || ""}`,
-    margin,
-    H - 26
-  );
-
-  return docp;
+async function restore(file) {
+  if (!state.user || !file) return;
+  const p = JSON.parse(await file.text());
+  if (p.cfg) await setDoc(settingsRef(state.user.uid), p.cfg, { merge: true });
+  for (const c of p.customers || []) await upsertCustomer(c, c.source || "backup");
+  for (const d of p.docs || []) await setDoc(doc(db, `${base(state.user.uid)}/docs/${d.id || uid("doc")}`), d, { merge: true });
+  for (const e of p.equipment || []) await setDoc(doc(db, `${base(state.user.uid)}/equipment/${e.id || uid("eq")}`), e, { merge: true });
+  await loadAll();
 }
-
-function makePreview() {
-  try {
-    const pdf = buildPdfDoc();
-    const blob = pdf.output("blob");
-    if (state.previewBlobUrl) URL.revokeObjectURL(state.previewBlobUrl);
-    state.previewBlobUrl = URL.createObjectURL(blob);
-    if ($("pdfFrame")) $("pdfFrame").src = state.previewBlobUrl;
-  } catch {
-    alert("No se pudo generar preview.");
-  }
+function setView(view) {
+  state.view = view;
+  document.querySelectorAll(".view").forEach(v => v.classList.remove("is-active"));
+  $("view-" + view)?.classList.add("is-active");
+  document.querySelectorAll(".navBtn").forEach(b => b.classList.toggle("is-active", b.dataset.view === view));
+  const names = { dashboard: "Dashboard Enterprise", crm: "CRM Premium", equipment: "Equipos", services: "Servicios", editor: "Documento", customers: "Clientes", history: "Historial", inventory: "Inventario", reports: "Reportes", settings: "Configuración" };
+  $("pageTitle").textContent = names[view] || "Oasis Business Cloud";
+  refreshAll();
 }
-
-async function confirmPDF() {
-  await saveCurrentToHistory({ forceNumber: true });
-
-  const cfg = state.cfg || defaultCfg();
-  if (cfg?.biz?.logoUrl && !cfg.biz.logoDataUrl) {
-    try { cfg.biz.logoDataUrl = await urlToDataUrl(cfg.biz.logoUrl); } catch {}
-  }
-
-  try {
-    const pdf = buildPdfDoc();
-    const file = `${state.current.type}_${state.current.number || "AUTO"}.pdf`;
-    pdf.save(file);
-    makePreview();
-    setSub("preview");
-  } catch {
-    alert("PDF falló.");
-  }
+function bind() {
+  document.querySelectorAll(".navBtn").forEach(b => b.addEventListener("click", () => setView(b.dataset.view)));
+  $("btnLogin").onclick = login;
+  $("btnLogout").onclick = logout;
+  $("btnNewDoc").onclick = () => { state.current = newDoc(); state.activeDocId = null; setView("editor"); syncForm(); };
+  $("btnAddItem").onclick = () => { readForm(); state.current.items.push({ id: uid("it"), desc: "", qty: 1, price: 0 }); renderItems(); };
+  ["docType", "docNumber", "docDate", "docStatus", "clientName", "clientContact", "clientAddr", "notes", "terms"].forEach(id => $(id)?.addEventListener("input", () => { if (id === "clientName") useCustomerByName(); readForm(); }));
+  $("btnSaveDoc").onclick = () => saveDoc();
+  $("btnPDF").onclick = makePDF;
+  $("btnDuplicate").onclick = duplicateDoc;
+  $("btnDeleteDoc").onclick = deleteCurrentDoc;
+  $("btnAddCustomer").onclick = addCustomer;
+  $("btnImportCrm").onclick = importCrmCustomers;
+  $("btnImportCrm2").onclick = importCrmCustomers;
+  $("btnRefresh").onclick = loadAll;
+  $("customerSearch").oninput = renderCustomers;
+  $("globalSearch").oninput = () => { renderDashboard(); renderCustomers(); renderHistory(); };
+  $("btnSaveSettings").onclick = saveSettings;
+  $("btnExportCustomers").onclick = () => exportCSV([["Nombre", "Contacto", "Dirección", "Origen"], ...mergedCustomers().map(c => [c.name, c.contact, c.addr, c.source])], `clientes_${today()}.csv`);
+  $("btnExportDocs").onclick = () => exportCSV([["Fecha", "Número", "Cliente", "Total", "Estado"], ...state.docs.map(d => [d.date, d.number, d.client?.name, d.totals?.grand, d.status])], `documentos_${today()}.csv`);
+  $("btnBackup").onclick = backup;
+  $("btnRestore").onclick = () => $("restoreFile").click();
+  $("restoreFile").onchange = e => restore(e.target.files?.[0]);
+  if ($("btnCrmNewDoc")) $("btnCrmNewDoc").onclick = () => { state.current = newDoc(); state.activeDocId = null; setView("editor"); syncForm(); };
+  if ($("btnExportCrm")) $("btnExportCrm").onclick = () => exportCSV([["Cliente", "Contacto", "Dirección", "Documentos", "Equipos", "Valor"], ...mergedCustomers().map(c => { const st = customerStats(c.name); return [c.name, c.contact, c.addr, st.docs, st.eq, st.total]; })], `crm_${today()}.csv`);
+  if ($("btnSaveEquipment")) $("btnSaveEquipment").onclick = saveEquipment;
+  if ($("btnExportEquipment")) $("btnExportEquipment").onclick = () => exportCSV([["Cliente", "Propiedad", "Tipo", "Marca", "Modelo", "Capacidad", "Refrigerante", "Voltaje", "Garantía", "Health"], ...(state.equipment || []).map(e => [e.customerName, e.property, e.type, e.brand, e.model, e.capacity, e.refrigerant, e.voltage, e.warrantyUntil, e.health])], `equipos_${today()}.csv`);
 }
-
-function bindEvents() {
-  document.querySelectorAll(".bottomLink").forEach((b) => {
-    b.addEventListener("click", () => setView(b.dataset.view));
-  });
-
-  document.querySelectorAll(".subtab").forEach((b) => {
-    b.addEventListener("click", () => setSub(b.dataset.sub));
-  });
-
-  $("btnNew")?.addEventListener("click", () => {
-    state.activeDocId = null;
-    state.current = newDoc();
-    renderInvoicing();
-    setView("invoicing");
-    setSub("confirm");
-  });
-
-  $("btnQuickNew")?.addEventListener("click", () => {
-    state.activeDocId = null;
-    state.current = newDoc();
-    renderInvoicing();
-    setView("invoicing");
-    setSub("confirm");
-  });
-
-  $("btnQuickPreview")?.addEventListener("click", () => {
-    setView("invoicing");
-    setSub("preview");
-  });
-
-  $("btnQuickHistory")?.addEventListener("click", () => {
-    setView("history");
-  });
-
-  $("btnSettings")?.addEventListener("click", openBiz);
-  $("btnOpenConfig")?.addEventListener("click", openBiz);
-  $("btnCloseBiz")?.addEventListener("click", closeBiz);
-  $("btnSaveBiz")?.addEventListener("click", saveBiz);
-
-  [
-    "docType",
-    "docNumber",
-    "docDate",
-    "docStatus",
-    "clientName",
-    "clientContact",
-    "clientAddr",
-    "validUntil",
-    "notes",
-    "terms"
-  ].forEach((id) => {
-    if (!$(id)) return;
-    $(id).addEventListener("input", () => {
-      readDocHeaderIntoState();
-      updateTotalsLive();
-    });
-    $(id).addEventListener("change", () => {
-      readDocHeaderIntoState();
-      updateTotalsLive();
-    });
-  });
-
-  $("btnAddItem")?.addEventListener("click", () => {
-    state.current.items.push({ id: uid("it"), desc: "", qty: 1, price: 0, catId: "", svcId: "" });
-    renderItemsMobile();
-    updateTotalsLive();
-  });
-
-  $("btnSaveDoc")?.addEventListener("click", async () => {
-    try {
-      await saveCurrentToHistory({ forceNumber: false });
-      alert("Guardado ✅");
-    } catch (e) {
-      console.error(e);
-      alert("No se pudo guardar.");
-    }
-  });
-
-  $("btnPDF")?.addEventListener("click", confirmPDF);
-  $("btnConfirmFromPreview")?.addEventListener("click", confirmPDF);
-  $("btnRefreshPreview")?.addEventListener("click", makePreview);
-  $("btnDuplicate")?.addEventListener("click", duplicateDoc);
-  $("btnDelete")?.addEventListener("click", deleteDocCloud);
-
-  $("histSearch")?.addEventListener("input", renderHistory);
-
-  $("btnExportHist")?.addEventListener("click", () => {
-    const blob = new Blob([JSON.stringify(state.docs || [], null, 2)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `docs_${toISODate(new Date())}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  });
-
-  $("btnClearHist")?.addEventListener("click", async () => {
-    if (!state.user) return alert("Login requerido.");
-    if (!confirm("¿Vaciar historial completo?")) return;
-
-    for (const d of (state.docs || [])) {
-      await deleteDoc(doc(db, `${userBase(state.user.uid)}/docs/${d.id}`));
-    }
-    await loadAllFromFirestore();
-  });
-
-  $("btnAddCustomer")?.addEventListener("click", addCustomer);
-  $("cSearch")?.addEventListener("input", renderCustomers);
-
-  $("btnExportBackup")?.addEventListener("click", async () => {
-    try {
-      await exportBackupFile();
-    } catch (e) {
-      console.error(e);
-      alert("No se pudo exportar backup.");
-    }
-  });
-
-  $("btnRestoreBackup")?.addEventListener("click", () => {
-    $("restoreBackupFile")?.click();
-  });
-
-  $("restoreBackupFile")?.addEventListener("change", async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    try {
-      await restoreBackupFromFile(file);
-    } catch (err) {
-      console.error(err);
-      alert(err?.message || "No se pudo restaurar.");
-    }
-
-    e.target.value = "";
-  });
-
-  $("hubBackBtn")?.setAttribute("href", HUB_URL);
-}
-
-function boot() {
-  ensureAuthButtons();
-  bindEvents();
-
-  state.cfg = normalizeCfg(defaultCfg());
-  indexCatalog();
+async function boot() {
+  bind();
+  state.cfg = defaultCfg();
   state.current = newDoc();
-
-  setView("invoicing");
-  setSub("confirm");
-  renderItemsMobile();
-  updateTotalsLive();
-
-  onAuthStateChanged(auth, async (user) => {
-    state.user = user || null;
-    refreshAuthUI();
-
-    if (state.user) {
-      await loadAllFromFirestore();
-      if (!state.cfg) state.cfg = normalizeCfg(defaultCfg());
-    } else {
-      state.cfg = normalizeCfg(defaultCfg());
-      indexCatalog();
-      state.docs = [];
-      state.customers = [];
-      refreshKPIs();
-      renderHistory();
-      renderCustomers();
-      renderReporting();
-    }
-
-    state.current.taxRate = Number(state.cfg.taxRate || 11.5);
-    syncFormFromState();
-    updateTotalsLive();
-    renderItemsMobile();
+  syncForm();
+  setAuthUI();
+  try { await getRedirectResult(auth); } catch (e) { console.warn(e); }
+  onAuthStateChanged(auth, async (u) => {
+    state.user = u || null;
+    setAuthUI();
+    if (u) await loadAll();
+    else { state.docs = []; state.customers = []; state.equipment = []; refreshAll(); }
   });
 }
-
 document.addEventListener("DOMContentLoaded", boot);
