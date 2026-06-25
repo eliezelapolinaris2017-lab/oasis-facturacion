@@ -40,6 +40,7 @@ let state = {
   docs: [],
   customers: [],
   equipment: [],
+  editingEquipmentId: null,
   services: [],
   inventory: [],
   selectedServiceId: null,
@@ -588,16 +589,61 @@ function renderEquipment() {
   body.innerHTML = "";
   (state.equipment || []).forEach(e => {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td><strong>${clean(e.customerName || "—")}</strong></td><td>${clean([e.type, e.brand, e.capacity].filter(Boolean).join(" · ") || "Equipo") }<div class="muted">${clean(e.model || "")}</div></td><td>${clean(e.property || "—")}</td><td>${e.warrantyUntil && e.warrantyUntil >= today() ? badge("ACTIVA") : badge("VENCIDA")}</td><td>${healthBadge(e.health)}</td><td><button class="chip del" type="button">Borrar</button></td>`;
+    tr.innerHTML = `<td><strong>${clean(e.customerName || "—")}</strong></td><td>${clean([e.type, e.brand, e.capacity].filter(Boolean).join(" · ") || "Equipo") }<div class="muted">${clean(e.model || "")}</div></td><td>${clean(e.property || "—")}</td><td>${e.warrantyUntil && e.warrantyUntil >= today() ? badge("ACTIVA") : badge("VENCIDA")}</td><td>${healthBadge(e.health)}</td><td><div class="rowActions"><button class="chip view" type="button">Ver completo</button><button class="chip edit" type="button">Editar</button><button class="chip del" type="button">Borrar</button></div></td>`;
+    tr.querySelector(".view").onclick = () => showEquipmentDetails(e);
+    tr.querySelector(".edit").onclick = () => editEquipment(e);
     tr.querySelector(".del").onclick = async () => { if (!state.user) return; if (!confirm("¿Borrar equipo?")) return; await deleteDoc(doc(db, `${base(state.user.uid)}/equipment/${e.id}`)); await loadAll(); };
     body.appendChild(tr);
   });
   if (!body.innerHTML) body.innerHTML = `<tr><td colspan="6" class="muted">Sin equipos registrados. Este módulo ya está listo para operar.</td></tr>`;
 }
+function equipmentFields(e) {
+  return [
+    ["Cliente", e.customerName], ["Propiedad / ubicación", e.property], ["Tipo", e.type], ["Marca", e.brand],
+    ["Modelo", e.model], ["Capacidad", e.capacity], ["Refrigerante", e.refrigerant], ["Voltaje", e.voltage],
+    ["Fecha de instalación", e.installDate], ["Garantía hasta", e.warrantyUntil], ["Health Score", `${Number(e.health || 0)}%`],
+    ["Creado", e.createdAt], ["Actualizado", e.updatedISO || e.updatedAt]
+  ];
+}
+function showEquipmentDetails(e) {
+  document.querySelector(".obcModal")?.remove();
+  const rows = equipmentFields(e).map(([k, v]) => `<div class="detailRow"><span>${clean(k)}</span><strong>${clean(v || "—")}</strong></div>`).join("");
+  document.body.insertAdjacentHTML("beforeend", `<div class="obcModal"><div class="obcModalCard"><div class="cardHead"><div><p class="eyebrow">Expediente técnico</p><h2>${clean([e.type, e.brand, e.capacity].filter(Boolean).join(" · ") || "Equipo")}</h2></div><button class="chip closeModal" type="button">Cerrar</button></div><div class="detailGrid">${rows}</div><div class="actionBar"><button class="btn ghost modalEdit" type="button">Editar equipo</button><button class="btn primary modalDoc" type="button">Crear documento</button></div></div></div>`);
+  document.querySelector(".closeModal").onclick = () => document.querySelector(".obcModal")?.remove();
+  document.querySelector(".obcModal").onclick = ev => { if (ev.target.classList.contains("obcModal")) ev.currentTarget.remove(); };
+  document.querySelector(".modalEdit").onclick = () => { document.querySelector(".obcModal")?.remove(); editEquipment(e); };
+  document.querySelector(".modalDoc").onclick = () => {
+    document.querySelector(".obcModal")?.remove();
+    state.current = newDoc();
+    state.current.client = { name: e.customerName || "", contact: "", addr: e.property || "" };
+    state.current.items = [{ id: uid("it"), desc: `Servicio ${[e.type, e.brand, e.capacity, e.model].filter(Boolean).join(" · ")}`, qty: 1, price: 0 }];
+    state.activeDocId = null;
+    setView("editor");
+    syncForm();
+  };
+}
+function editEquipment(e) {
+  state.editingEquipmentId = e.id;
+  if ($("eqCustomer")) $("eqCustomer").value = e.customerName || "";
+  if ($("eqProperty")) $("eqProperty").value = e.property || "";
+  if ($("eqType")) $("eqType").value = e.type || "Mini Split";
+  if ($("eqBrand")) $("eqBrand").value = e.brand || "";
+  if ($("eqModel")) $("eqModel").value = e.model || "";
+  if ($("eqCapacity")) $("eqCapacity").value = e.capacity || "";
+  if ($("eqRefrigerant")) $("eqRefrigerant").value = e.refrigerant || "R32";
+  if ($("eqVoltage")) $("eqVoltage").value = e.voltage || "";
+  if ($("eqInstallDate")) $("eqInstallDate").value = e.installDate || "";
+  if ($("eqWarrantyUntil")) $("eqWarrantyUntil").value = e.warrantyUntil || "";
+  if ($("eqHealth")) $("eqHealth").value = e.health || 100;
+  if ($("btnSaveEquipment")) $("btnSaveEquipment").textContent = "Actualizar equipo";
+  setView("equipment");
+}
 async function saveEquipment() {
   if (!state.user) return alert("Login requerido.");
+  const existing = state.editingEquipmentId ? (state.equipment || []).find(x => x.id === state.editingEquipmentId) : null;
   const payload = {
-    id: uid("eq"),
+    ...(existing || {}),
+    id: state.editingEquipmentId || uid("eq"),
     customerName: $("eqCustomer").value,
     property: $("eqProperty").value.trim(),
     type: $("eqType").value,
@@ -609,12 +655,14 @@ async function saveEquipment() {
     installDate: $("eqInstallDate").value,
     warrantyUntil: $("eqWarrantyUntil").value,
     health: Number($("eqHealth").value || 100),
-    createdAt: now(),
+    createdAt: existing?.createdAt || now(),
     updatedAt: serverTimestamp(),
     updatedISO: now()
   };
   if (!payload.customerName) return alert("Selecciona un cliente.");
   await setDoc(doc(db, `${base(state.user.uid)}/equipment/${payload.id}`), payload, { merge: true });
+  state.editingEquipmentId = null;
+  if ($("btnSaveEquipment")) $("btnSaveEquipment").textContent = "Guardar equipo";
   ["eqProperty", "eqBrand", "eqModel", "eqCapacity", "eqVoltage", "eqInstallDate", "eqWarrantyUntil"].forEach(id => { if ($(id)) $(id).value = ""; });
   if ($("eqHealth")) $("eqHealth").value = 100;
   await loadAll();
