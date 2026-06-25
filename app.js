@@ -27,6 +27,8 @@ const base = (u) => `users/${u}`;
 const docsCol = (u) => collection(db, `${base(u)}/docs`);
 const customersCol = (u) => collection(db, `${base(u)}/customers`);
 const equipmentCol = (u) => collection(db, `${base(u)}/equipment`);
+const servicesCol = (u) => collection(db, `${base(u)}/services`);
+const inventoryCol = (u) => collection(db, `${base(u)}/inventory`);
 const settingsRef = (u) => doc(db, `${base(u)}/settings/main`);
 const crmCol = (u) => collection(db, `${base(u)}/oasis_crm_v3/clients/items`);
 
@@ -39,6 +41,10 @@ let state = {
   customers: [],
   equipment: [],
   services: [],
+  inventory: [],
+  selectedServiceId: null,
+  editingServiceId: null,
+  editingInventoryId: null,
   cfg: null,
   loaded: false
 };
@@ -98,7 +104,7 @@ function setAuthUI() {
   $("btnLogin")?.classList.toggle("hidden", on);
   $("btnLogout")?.classList.toggle("hidden", !on);
   $("authState").textContent = on ? "Online" : "Offline";
-  ["btnSaveDoc", "btnPDF", "btnDeleteDoc", "btnAddCustomer", "btnImportCrm", "btnImportCrm2", "btnSaveSettings", "btnBackup", "btnRestore"].forEach(id => {
+  ["btnSaveDoc", "btnPDF", "btnDeleteDoc", "btnAddCustomer", "btnImportCrm", "btnImportCrm2", "btnSaveSettings", "btnBackup", "btnRestore", "btnSaveService", "btnServiceToInvoice", "btnExportServices", "btnSaveInventory", "btnExportInventory", "btnExportAllReports"].forEach(id => {
     if ($(id)) $(id).disabled = !on;
   });
 }
@@ -121,14 +127,18 @@ async function loadAll() {
     try { state.cfg.biz.logoDataUrl = await urlToDataUrl(state.cfg.biz.logoUrl); } catch {}
   }
 
-  const [ds, cs, es] = await Promise.all([
+  const [ds, cs, es, ss, invs] = await Promise.all([
     getDocs(query(docsCol(uidv), orderBy("updatedAt", "desc"))).catch(() => getDocs(docsCol(uidv))),
     getDocs(query(customersCol(uidv), orderBy("updatedAt", "desc"))).catch(() => getDocs(customersCol(uidv))),
-    getDocs(query(equipmentCol(uidv), orderBy("updatedAt", "desc"))).catch(() => getDocs(equipmentCol(uidv))).catch(() => ({ docs: [] }))
+    getDocs(query(equipmentCol(uidv), orderBy("updatedAt", "desc"))).catch(() => getDocs(equipmentCol(uidv))).catch(() => ({ docs: [] })),
+    getDocs(query(servicesCol(uidv), orderBy("updatedAt", "desc"))).catch(() => getDocs(servicesCol(uidv))).catch(() => ({ docs: [] })),
+    getDocs(query(inventoryCol(uidv), orderBy("updatedAt", "desc"))).catch(() => getDocs(inventoryCol(uidv))).catch(() => ({ docs: [] }))
   ]);
   state.docs = ds.docs.map(d => ({ id: d.id, ...d.data() }));
   state.customers = cs.docs.map(d => ({ id: d.id, ...d.data() }));
   state.equipment = es.docs.map(d => ({ id: d.id, ...d.data() }));
+  state.services = ss.docs.map(d => ({ id: d.id, ...d.data() }));
+  state.inventory = invs.docs.map(d => ({ id: d.id, ...d.data() }));
   state.loaded = true;
   refreshAll();
   $("authState").textContent = "Online";
@@ -475,7 +485,9 @@ function refreshKPIs() {
   const quotes = state.docs.filter(d => d.type === "COT").length;
   const invoices = state.docs.filter(d => d.type === "FAC").length;
   const warrantyActive = (state.equipment || []).filter(e => e.warrantyUntil && e.warrantyUntil >= today()).length;
-  const alerts = state.docs.filter(d => d.status !== "PAGADA" && d.status !== "CANCELADA").length + (state.equipment || []).filter(e => Number(e.health || 100) < 60).length;
+  const openServices = (state.services || []).filter(x => !["COMPLETADO", "FACTURADO", "CANCELADO"].includes(String(x.status || ""))).length;
+  const lowInventory = (state.inventory || []).filter(x => Number(x.qty || 0) <= Number(x.min || 0)).length;
+  const alerts = state.docs.filter(d => d.status !== "PAGADA" && d.status !== "CANCELADA").length + (state.equipment || []).filter(e => Number(e.health || 100) < 60).length + openServices + lowInventory;
   if ($("kpiCustomers")) $("kpiCustomers").textContent = customers.length;
   if ($("kpiDocs")) $("kpiDocs").textContent = state.docs.length;
   if ($("kpiRevenue")) $("kpiRevenue").textContent = money(revenue);
@@ -486,10 +498,16 @@ function refreshKPIs() {
   if ($("kpiWarranty")) $("kpiWarranty").textContent = warrantyActive;
   if ($("kpiServices")) $("kpiServices").textContent = (state.services || []).length;
   if ($("kpiAlerts")) $("kpiAlerts").textContent = alerts;
+  refreshServiceMetrics();
+  refreshInventoryMetrics();
   if ($("rRevenue")) $("rRevenue").textContent = money(revenue);
   if ($("rPending")) $("rPending").textContent = money(pending);
   if ($("rCustomers")) $("rCustomers").textContent = customers.length;
   if ($("rEquipment")) $("rEquipment").textContent = (state.equipment || []).length;
+  if ($("rServices")) $("rServices").textContent = (state.services || []).length;
+  if ($("rInventory")) $("rInventory").textContent = money((state.inventory || []).reduce((a, x) => a + Number(x.qty || 0) * Number(x.cost || 0), 0));
+  if ($("rLowInventory")) $("rLowInventory").textContent = (state.inventory || []).filter(x => Number(x.qty || 0) <= Number(x.min || 0)).length;
+  if ($("rOpenServices")) $("rOpenServices").textContent = (state.services || []).filter(x => !["COMPLETADO", "FACTURADO", "CANCELADO"].includes(String(x.status || ""))).length;
 }
 function renderDashboard() {
   const body = $("recentBody"); body.innerHTML = "";
@@ -602,6 +620,181 @@ async function saveEquipment() {
   await loadAll();
 }
 
+function renderServiceCustomerOptions() {
+  const sel = $("svcCustomer"); if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = `<option value="">Seleccionar cliente</option>` + mergedCustomers().map(c => `<option value="${clean(c.name)}">${clean(c.name)}</option>`).join("");
+  if (current) sel.value = current;
+}
+function clearServiceForm() {
+  state.editingServiceId = null;
+  ["svcTech", "svcAmount", "svcLocation", "svcNotes", "svcMaterials"].forEach(id => { if ($(id)) $(id).value = ""; });
+  if ($("svcCustomer")) $("svcCustomer").value = "";
+  if ($("svcDate")) $("svcDate").value = today();
+  if ($("svcStatus")) $("svcStatus").value = "PENDIENTE";
+  if ($("svcType")) $("svcType").value = "Diagnóstico";
+}
+function servicePayloadFromForm() {
+  return {
+    id: state.editingServiceId || uid("svc"),
+    customerName: $("svcCustomer")?.value || "",
+    date: $("svcDate")?.value || today(),
+    tech: $("svcTech")?.value.trim() || "",
+    status: $("svcStatus")?.value || "PENDIENTE",
+    type: $("svcType")?.value || "Servicio",
+    amount: Number($("svcAmount")?.value || 0),
+    location: $("svcLocation")?.value.trim() || "",
+    notes: $("svcNotes")?.value.trim() || "",
+    materials: $("svcMaterials")?.value.trim() || "",
+    updatedAt: serverTimestamp(),
+    updatedISO: now(),
+    createdAt: now()
+  };
+}
+async function saveService() {
+  if (!state.user) return alert("Login requerido.");
+  const payload = servicePayloadFromForm();
+  if (!payload.customerName) return alert("Selecciona un cliente.");
+  if (state.editingServiceId) {
+    const old = (state.services || []).find(x => x.id === state.editingServiceId);
+    payload.createdAt = old?.createdAt || payload.createdAt;
+  }
+  await setDoc(doc(db, `${base(state.user.uid)}/services/${payload.id}`), payload, { merge: true });
+  state.selectedServiceId = payload.id;
+  clearServiceForm();
+  await loadAll();
+}
+function editService(id) {
+  const x = (state.services || []).find(s => s.id === id); if (!x) return;
+  state.editingServiceId = id; state.selectedServiceId = id;
+  renderServiceCustomerOptions();
+  if ($("svcCustomer")) $("svcCustomer").value = x.customerName || "";
+  if ($("svcDate")) $("svcDate").value = x.date || today();
+  if ($("svcTech")) $("svcTech").value = x.tech || "";
+  if ($("svcStatus")) $("svcStatus").value = x.status || "PENDIENTE";
+  if ($("svcType")) $("svcType").value = x.type || "Diagnóstico";
+  if ($("svcAmount")) $("svcAmount").value = x.amount || 0;
+  if ($("svcLocation")) $("svcLocation").value = x.location || "";
+  if ($("svcNotes")) $("svcNotes").value = x.notes || "";
+  if ($("svcMaterials")) $("svcMaterials").value = x.materials || "";
+}
+async function deleteService(id) {
+  if (!state.user) return;
+  if (!confirm("¿Borrar servicio?")) return;
+  await deleteDoc(doc(db, `${base(state.user.uid)}/services/${id}`));
+  if (state.selectedServiceId === id) state.selectedServiceId = null;
+  await loadAll();
+}
+async function serviceToInvoice() {
+  const svc = (state.services || []).find(x => x.id === state.selectedServiceId) || (state.services || [])[0];
+  if (!svc) return alert("Selecciona un servicio primero.");
+  const c = mergedCustomers().find(x => norm(x.name) === norm(svc.customerName)) || { name: svc.customerName, contact: "", addr: svc.location || "" };
+  state.current = newDoc("FAC");
+  state.current.client = { name: c.name || svc.customerName, contact: c.contact || "", addr: svc.location || c.addr || "" };
+  state.current.items = [{ id: uid("it"), desc: `${svc.type || "Servicio"} - ${svc.notes || "Orden de servicio"}`.trim(), qty: 1, price: Number(svc.amount || 0) }];
+  state.current.notes = [svc.notes, svc.materials ? `Materiales: ${svc.materials}` : "", svc.tech ? `Técnico: ${svc.tech}` : ""].filter(Boolean).join("\n");
+  state.current.status = "PENDIENTE";
+  state.activeDocId = null;
+  if (state.user) await setDoc(doc(db, `${base(state.user.uid)}/services/${svc.id}`), { status: "FACTURADO", invoiceDraftISO: now(), updatedAt: serverTimestamp(), updatedISO: now() }, { merge: true });
+  setView("editor"); syncForm();
+}
+function refreshServiceMetrics() {
+  if (!$("svcPending")) return;
+  const services = state.services || [];
+  $("svcPending").textContent = services.filter(x => !["COMPLETADO", "FACTURADO", "CANCELADO"].includes(String(x.status || ""))).length;
+  $("svcDone").textContent = services.filter(x => x.status === "COMPLETADO").length;
+  $("svcInvoiced").textContent = services.filter(x => x.status === "FACTURADO").length;
+  $("svcValue").textContent = money(services.reduce((a, x) => a + Number(x.amount || 0), 0));
+}
+function renderServices() {
+  renderServiceCustomerOptions(); refreshServiceMetrics();
+  if ($("svcDate") && !$("svcDate").value) $("svcDate").value = today();
+  const body = $("servicesBody"); if (!body) return;
+  body.innerHTML = "";
+  (state.services || []).forEach(svc => {
+    const tr = document.createElement("tr");
+    const active = state.selectedServiceId === svc.id ? " ✓" : "";
+    tr.innerHTML = `<td>${clean(svc.date || "—")}</td><td><strong>${clean(svc.customerName || "—")}</strong><div class="muted">${clean(svc.location || "")}</div></td><td>${clean(svc.type || "—")}</td><td>${clean(svc.tech || "—")}</td><td><strong>${money(svc.amount || 0)}</strong></td><td>${badge(svc.status || "PENDIENTE")}</td><td><button class="chip pick" type="button">Sel${active}</button> <button class="chip edit" type="button">Editar</button> <button class="chip del" type="button">Borrar</button></td>`;
+    tr.querySelector(".pick").onclick = () => { state.selectedServiceId = svc.id; renderServices(); };
+    tr.querySelector(".edit").onclick = () => editService(svc.id);
+    tr.querySelector(".del").onclick = () => deleteService(svc.id);
+    body.appendChild(tr);
+  });
+  if (!body.innerHTML) body.innerHTML = `<tr><td colspan="7" class="muted">Sin servicios. Crea la primera orden y conviértela en factura cuando termine.</td></tr>`;
+}
+function clearInventoryForm() {
+  state.editingInventoryId = null;
+  ["invName", "invCost", "invLocation", "invNote"].forEach(id => { if ($(id)) $(id).value = ""; });
+  if ($("invQty")) $("invQty").value = 1;
+  if ($("invMin")) $("invMin").value = 1;
+  if ($("invCategory")) $("invCategory").value = "Refrigerante";
+}
+async function saveInventory() {
+  if (!state.user) return alert("Login requerido.");
+  const id = state.editingInventoryId || uid("inv");
+  const old = (state.inventory || []).find(x => x.id === id);
+  const payload = { id, category: $("invCategory")?.value || "Otro", name: $("invName")?.value.trim() || "", qty: Number($("invQty")?.value || 0), min: Number($("invMin")?.value || 0), cost: Number($("invCost")?.value || 0), location: $("invLocation")?.value.trim() || "", note: $("invNote")?.value.trim() || "", createdAt: old?.createdAt || now(), updatedAt: serverTimestamp(), updatedISO: now() };
+  if (!payload.name) return alert("Nombre del ítem requerido.");
+  await setDoc(doc(db, `${base(state.user.uid)}/inventory/${id}`), payload, { merge: true });
+  clearInventoryForm();
+  await loadAll();
+}
+function editInventory(id) {
+  const x = (state.inventory || []).find(i => i.id === id); if (!x) return;
+  state.editingInventoryId = id;
+  if ($("invCategory")) $("invCategory").value = x.category || "Otro";
+  if ($("invName")) $("invName").value = x.name || "";
+  if ($("invQty")) $("invQty").value = x.qty ?? 0;
+  if ($("invMin")) $("invMin").value = x.min ?? 0;
+  if ($("invCost")) $("invCost").value = x.cost ?? 0;
+  if ($("invLocation")) $("invLocation").value = x.location || "";
+  if ($("invNote")) $("invNote").value = x.note || "";
+}
+async function deleteInventory(id) {
+  if (!state.user) return;
+  if (!confirm("¿Borrar ítem de inventario?")) return;
+  await deleteDoc(doc(db, `${base(state.user.uid)}/inventory/${id}`));
+  await loadAll();
+}
+function refreshInventoryMetrics() {
+  if (!$("invCount")) return;
+  const inv = state.inventory || [];
+  $("invCount").textContent = inv.length;
+  $("invValue").textContent = money(inv.reduce((a, x) => a + Number(x.qty || 0) * Number(x.cost || 0), 0));
+  $("invLow").textContent = inv.filter(x => Number(x.qty || 0) <= Number(x.min || 0)).length;
+  $("invCategories").textContent = new Set(inv.map(x => x.category).filter(Boolean)).size;
+}
+function renderInventory() {
+  refreshInventoryMetrics();
+  const body = $("inventoryBody"); if (!body) return;
+  body.innerHTML = "";
+  (state.inventory || []).forEach(x => {
+    const low = Number(x.qty || 0) <= Number(x.min || 0);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${clean(x.category || "—")}</td><td><strong>${clean(x.name || "—")}</strong><div class="muted">${clean(x.location || x.note || "")}</div></td><td>${Number(x.qty || 0)}</td><td>${Number(x.min || 0)}</td><td><strong>${money(Number(x.qty || 0) * Number(x.cost || 0))}</strong></td><td>${low ? badge("BAJO") : badge("OK")}</td><td><button class="chip edit" type="button">Editar</button> <button class="chip del" type="button">Borrar</button></td>`;
+    tr.querySelector(".edit").onclick = () => editInventory(x.id);
+    tr.querySelector(".del").onclick = () => deleteInventory(x.id);
+    body.appendChild(tr);
+  });
+  if (!body.innerHTML) body.innerHTML = `<tr><td colspan="7" class="muted">Sin inventario. Registra refrigerante, piezas o herramientas.</td></tr>`;
+}
+function renderReports() {
+  const top = $("reportTopCustomers");
+  if (top) {
+    top.innerHTML = "";
+    mergedCustomers().map(c => ({ ...c, stats: customerStats(c.name) })).sort((a,b)=>b.stats.total-a.stats.total).slice(0,5).forEach(c => top.innerHTML += `<div class="listItem"><strong>${clean(c.name)}</strong><small>${c.stats.docs} documentos · ${money(c.stats.total)} · ${c.stats.eq} equipos</small></div>`);
+    if (!top.innerHTML) top.innerHTML = `<div class="listItem"><strong>Sin data</strong><small>Los reportes se llenan al crear documentos, servicios e inventario.</small></div>`;
+  }
+  const alerts = $("reportAlerts");
+  if (alerts) {
+    const items = [];
+    (state.docs || []).filter(d => d.status !== "PAGADA" && d.status !== "CANCELADA").slice(0,4).forEach(d => items.push(`Cobro pendiente: ${d.client?.name || "Cliente"} · ${money(d.totals?.grand)}`));
+    (state.inventory || []).filter(x => Number(x.qty || 0) <= Number(x.min || 0)).slice(0,4).forEach(x => items.push(`Inventario bajo: ${x.name} · ${x.qty}/${x.min}`));
+    (state.services || []).filter(x => !["COMPLETADO","FACTURADO","CANCELADO"].includes(String(x.status || ""))).slice(0,4).forEach(x => items.push(`Servicio abierto: ${x.customerName} · ${x.status}`));
+    alerts.innerHTML = items.map(t => `<div class="listItem"><strong>⚠ ${clean(t)}</strong><small>Requiere seguimiento operativo</small></div>`).join("") || `<div class="listItem"><strong>Sin alertas críticas</strong><small>La operación está limpia.</small></div>`;
+  }
+}
+
 function refreshSettingsUI() {
   if (!state.cfg) return;
   if ($("bizName")) $("bizName").value = state.cfg.biz?.name || "";
@@ -610,7 +803,7 @@ function refreshSettingsUI() {
   if ($("bizAddr")) $("bizAddr").value = state.cfg.biz?.addr || "";
   if ($("taxRate")) $("taxRate").value = state.cfg.taxRate ?? 0;
 }
-function refreshAll() { setAuthUI(); refreshKPIs(); renderDashboard(); renderCustomers(); renderHistory(); renderCRM(); renderEquipment(); refreshSettingsUI(); renderDatalist(); }
+function refreshAll() { setAuthUI(); refreshKPIs(); renderDashboard(); renderCustomers(); renderHistory(); renderCRM(); renderEquipment(); renderServices(); renderInventory(); renderReports(); refreshSettingsUI(); renderDatalist(); }
 async function addCustomer() {
   if (!state.user) return alert("Login requerido.");
   const c = { name: $("cName").value.trim(), contact: $("cContact").value.trim(), addr: $("cAddr").value.trim(), note: $("cNote").value.trim() };
@@ -647,10 +840,10 @@ function exportCSV(rows, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 500);
 }
 function backup() {
-  const payload = { version: "oasis_business_cloud_enterprise_v21", exportedAt: now(), docs: state.docs, customers: state.customers, equipment: state.equipment, cfg: state.cfg };
+  const payload = { version: "oasis_business_cloud_enterprise_v21", exportedAt: now(), docs: state.docs, customers: state.customers, equipment: state.equipment, services: state.services, inventory: state.inventory, cfg: state.cfg };
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
-  a.download = `nexus_backup_${today()}.json`;
+  a.download = `oasis_business_backup_${today()}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 500);
 }
@@ -661,6 +854,8 @@ async function restore(file) {
   for (const c of p.customers || []) await upsertCustomer(c, c.source || "backup");
   for (const d of p.docs || []) await setDoc(doc(db, `${base(state.user.uid)}/docs/${d.id || uid("doc")}`), d, { merge: true });
   for (const e of p.equipment || []) await setDoc(doc(db, `${base(state.user.uid)}/equipment/${e.id || uid("eq")}`), e, { merge: true });
+  for (const svc of p.services || []) await setDoc(doc(db, `${base(state.user.uid)}/services/${svc.id || uid("svc")}`), svc, { merge: true });
+  for (const inv of p.inventory || []) await setDoc(doc(db, `${base(state.user.uid)}/inventory/${inv.id || uid("inv")}`), inv, { merge: true });
   await loadAll();
 }
 function setView(view) {
@@ -699,6 +894,14 @@ function bind() {
   if ($("btnExportCrm")) $("btnExportCrm").onclick = () => exportCSV([["Cliente", "Contacto", "Dirección", "Documentos", "Equipos", "Valor"], ...mergedCustomers().map(c => { const st = customerStats(c.name); return [c.name, c.contact, c.addr, st.docs, st.eq, st.total]; })], `crm_${today()}.csv`);
   if ($("btnSaveEquipment")) $("btnSaveEquipment").onclick = saveEquipment;
   if ($("btnExportEquipment")) $("btnExportEquipment").onclick = () => exportCSV([["Cliente", "Propiedad", "Tipo", "Marca", "Modelo", "Capacidad", "Refrigerante", "Voltaje", "Garantía", "Health"], ...(state.equipment || []).map(e => [e.customerName, e.property, e.type, e.brand, e.model, e.capacity, e.refrigerant, e.voltage, e.warrantyUntil, e.health])], `equipos_${today()}.csv`);
+  if ($("btnSaveService")) $("btnSaveService").onclick = saveService;
+  if ($("btnClearService")) $("btnClearService").onclick = clearServiceForm;
+  if ($("btnServiceToInvoice")) $("btnServiceToInvoice").onclick = serviceToInvoice;
+  if ($("btnExportServices")) $("btnExportServices").onclick = () => exportCSV([["Fecha", "Cliente", "Tipo", "Técnico", "Valor", "Estado", "Ubicación", "Notas", "Materiales"], ...(state.services || []).map(x => [x.date, x.customerName, x.type, x.tech, x.amount, x.status, x.location, x.notes, x.materials])], `servicios_${today()}.csv`);
+  if ($("btnSaveInventory")) $("btnSaveInventory").onclick = saveInventory;
+  if ($("btnClearInventory")) $("btnClearInventory").onclick = clearInventoryForm;
+  if ($("btnExportInventory")) $("btnExportInventory").onclick = () => exportCSV([["Categoría", "Nombre", "Cantidad", "Mínimo", "Costo", "Ubicación", "Nota"], ...(state.inventory || []).map(x => [x.category, x.name, x.qty, x.min, x.cost, x.location, x.note])], `inventario_${today()}.csv`);
+  if ($("btnExportAllReports")) $("btnExportAllReports").onclick = () => exportCSV([["Métrica", "Valor"], ["Ingresos mes", $("rRevenue")?.textContent || ""], ["Por cobrar", $("rPending")?.textContent || ""], ["Clientes", $("rCustomers")?.textContent || ""], ["Equipos", $("rEquipment")?.textContent || ""], ["Servicios", $("rServices")?.textContent || ""], ["Valor inventario", $("rInventory")?.textContent || ""]], `reporte_enterprise_${today()}.csv`);
 }
 async function boot() {
   bind();
@@ -711,7 +914,7 @@ async function boot() {
     state.user = u || null;
     setAuthUI();
     if (u) await loadAll();
-    else { state.docs = []; state.customers = []; state.equipment = []; refreshAll(); }
+    else { state.docs = []; state.customers = []; state.equipment = []; state.services = []; state.inventory = []; refreshAll(); }
   });
 }
 document.addEventListener("DOMContentLoaded", boot);

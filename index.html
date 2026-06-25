@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <title>Oasis Business Cloud Enterprise</title>
   <meta name="theme-color" content="#07070b" />
-  <link rel="stylesheet" href="styles.css?v=20260619-enterprise-v21" />
+  <link rel="stylesheet" href="styles.css?v=20260619-enterprise-v22-active" />
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
 </head>
@@ -40,7 +40,7 @@
     <section class="main">
       <header class="topbar">
         <div>
-          <div class="eyebrow">Oasis Business Cloud · V2.1 Enterprise</div>
+          <div class="eyebrow">Oasis Business Cloud · V2.2 Active Ops</div>
           <h1 id="pageTitle">Dashboard</h1>
         </div>
         <div class="topActions">
@@ -115,28 +115,78 @@
         </section>
 
         <section class="view" id="view-services">
-          <section class="card heroCard"><div><p class="eyebrow">Field Service</p><h2>Órdenes de servicio y agenda</h2><p class="muted">Base lista para asignar técnico, fotos, diagnóstico, firma, materiales y convertir servicio en factura. Sprint V2.2 montará el workflow completo.</p></div></section>
+          <section class="card heroCard"><div><p class="eyebrow">Field Service</p><h2>Órdenes de servicio y agenda</h2><p class="muted">Crea servicios reales, asígnalos, conviértelos en factura y controla el flujo operativo del día.</p></div><button class="btn primary" id="btnServiceToInvoice" type="button">Convertir seleccionado a factura</button></section>
           <section class="metrics">
-            <article class="metric"><span>Pendientes</span><strong>0</strong><small>Órdenes abiertas</small></article>
-            <article class="metric"><span>Completados</span><strong>0</strong><small>Hoy</small></article>
-            <article class="metric"><span>Técnicos</span><strong>0</strong><small>Próximo módulo</small></article>
-            <article class="metric"><span>Agenda</span><strong>Lista</strong><small>Preparada</small></article>
+            <article class="metric"><span>Pendientes</span><strong id="svcPending">0</strong><small>Órdenes abiertas</small></article>
+            <article class="metric"><span>Completados</span><strong id="svcDone">0</strong><small>Servicios cerrados</small></article>
+            <article class="metric"><span>Facturados</span><strong id="svcInvoiced">0</strong><small>Convertidos a factura</small></article>
+            <article class="metric"><span>Valor estimado</span><strong id="svcValue">$0.00</strong><small>Pipeline de servicios</small></article>
+          </section>
+          <section class="card">
+            <div class="cardHead"><h2>Nueva orden de servicio</h2><button class="chip" id="btnClearService" type="button">Limpiar</button></div>
+            <div class="grid4">
+              <label>Cliente<select class="input" id="svcCustomer"></select></label>
+              <label>Fecha<input class="input" id="svcDate" type="date" /></label>
+              <label>Técnico<input class="input" id="svcTech" placeholder="Nombre técnico" /></label>
+              <label>Estado<select class="input" id="svcStatus"><option>PENDIENTE</option><option>EN RUTA</option><option>TRABAJANDO</option><option>COMPLETADO</option><option>FACTURADO</option><option>CANCELADO</option></select></label>
+              <label>Tipo<select class="input" id="svcType"><option>Diagnóstico</option><option>Mantenimiento</option><option>Instalación</option><option>Reparación</option><option>Garantía</option><option>Otro</option></select></label>
+              <label>Costo estimado<input class="input" id="svcAmount" type="number" step="0.01" placeholder="0.00" /></label>
+              <label class="span2">Dirección / ubicación<input class="input" id="svcLocation" placeholder="Dirección del servicio" /></label>
+              <label class="span2">Diagnóstico / trabajo<textarea class="input area" id="svcNotes" rows="3" placeholder="Resumen del servicio"></textarea></label>
+              <label class="span2">Materiales<textarea class="input area" id="svcMaterials" rows="3" placeholder="Gas, piezas, filtros..."></textarea></label>
+              <button class="btn primary formBtn" id="btnSaveService" type="button">Guardar servicio</button>
+            </div>
+          </section>
+          <section class="card">
+            <div class="cardHead"><h2>Órdenes registradas</h2><button class="chip" id="btnExportServices" type="button">CSV</button></div>
+            <div class="tableWrap"><table><thead><tr><th>Fecha</th><th>Cliente</th><th>Tipo</th><th>Técnico</th><th>Valor</th><th>Estado</th><th></th></tr></thead><tbody id="servicesBody"></tbody></table></div>
           </section>
         </section>
 
         <section class="view" id="view-inventory">
-          <section class="card heroCard"><div><p class="eyebrow">Operaciones</p><h2>Inventario preparado</h2><p class="muted">Gas, capacitores, motores, compresores, filtros, herramientas, vehículos y alertas de bajo inventario. Esto entra en V2.3.</p></div></section>
+          <section class="card heroCard"><div><p class="eyebrow">Operaciones</p><h2>Inventario activo</h2><p class="muted">Control de gas, piezas, herramientas y alertas de bajo inventario. Nada de almacén a ciegas: aquí cada ítem cuenta.</p></div><button class="btn primary" id="btnExportInventory" type="button">Exportar inventario</button></section>
+          <section class="metrics">
+            <article class="metric"><span>Ítems</span><strong id="invCount">0</strong><small>Productos activos</small></article>
+            <article class="metric"><span>Valor inventario</span><strong id="invValue">$0.00</strong><small>Costo estimado</small></article>
+            <article class="metric"><span>Bajo mínimo</span><strong id="invLow">0</strong><small>Requieren compra</small></article>
+            <article class="metric"><span>Categorías</span><strong id="invCategories">0</strong><small>Operaciones</small></article>
+          </section>
+          <section class="card">
+            <div class="cardHead"><h2>Nuevo ítem</h2><button class="chip" id="btnClearInventory" type="button">Limpiar</button></div>
+            <div class="grid4">
+              <label>Categoría<select class="input" id="invCategory"><option>Refrigerante</option><option>Compresor</option><option>Capacitor</option><option>Motor</option><option>Filtro</option><option>Herramienta</option><option>Vehículo</option><option>Otro</option></select></label>
+              <label>Nombre<input class="input" id="invName" placeholder="R410A, capacitor 45/5..." /></label>
+              <label>Cantidad<input class="input" id="invQty" type="number" step="0.01" value="1" /></label>
+              <label>Mínimo<input class="input" id="invMin" type="number" step="0.01" value="1" /></label>
+              <label>Costo unitario<input class="input" id="invCost" type="number" step="0.01" placeholder="0.00" /></label>
+              <label>Ubicación<input class="input" id="invLocation" placeholder="Van, almacén, tienda..." /></label>
+              <label class="span2">Nota<input class="input" id="invNote" placeholder="Proveedor, serial, medida, uso..." /></label>
+              <button class="btn primary formBtn" id="btnSaveInventory" type="button">Guardar ítem</button>
+            </div>
+          </section>
+          <section class="card">
+            <div class="cardHead"><h2>Inventario registrado</h2><span class="chip">Alertas automáticas</span></div>
+            <div class="tableWrap"><table><thead><tr><th>Categoría</th><th>Ítem</th><th>Cantidad</th><th>Mínimo</th><th>Valor</th><th>Estado</th><th></th></tr></thead><tbody id="inventoryBody"></tbody></table></div>
+          </section>
         </section>
 
         <section class="view" id="view-reports">
           <section class="card">
-            <div class="cardHead"><h2>Reportes Enterprise</h2><span class="chip">V2.1</span></div>
+            <div class="cardHead"><h2>Reportes Enterprise</h2><button class="chip" id="btnExportAllReports" type="button">Exportar todo CSV</button></div>
             <div class="reportGrid">
               <div class="listItem"><strong id="rRevenue">$0.00</strong><small>Ingresos registrados</small></div>
               <div class="listItem"><strong id="rPending">$0.00</strong><small>Por cobrar</small></div>
               <div class="listItem"><strong id="rCustomers">0</strong><small>Clientes únicos</small></div>
               <div class="listItem"><strong id="rEquipment">0</strong><small>Equipos registrados</small></div>
+              <div class="listItem"><strong id="rServices">0</strong><small>Servicios registrados</small></div>
+              <div class="listItem"><strong id="rInventory">$0.00</strong><small>Valor inventario</small></div>
+              <div class="listItem"><strong id="rLowInventory">0</strong><small>Alertas inventario</small></div>
+              <div class="listItem"><strong id="rOpenServices">0</strong><small>Servicios abiertos</small></div>
             </div>
+          </section>
+          <section class="split">
+            <article class="card"><div class="cardHead"><h2>Top clientes por valor</h2></div><div class="list" id="reportTopCustomers"></div></article>
+            <article class="card"><div class="cardHead"><h2>Alertas operacionales</h2></div><div class="list" id="reportAlerts"></div></article>
           </section>
         </section>
 
@@ -231,6 +281,6 @@
       </main>
     </section>
   </div>
-  <script type="module" src="app.js?v=20260619-enterprise-v21"></script>
+  <script type="module" src="app.js?v=20260619-enterprise-v22-active"></script>
 </body>
 </html>
